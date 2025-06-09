@@ -1,0 +1,238 @@
+version: '3.8'
+
+services:
+  # SS7 Signaling Transfer Point (already have)
+  osmo-stp:
+    build: .
+    container_name: osmo-stp
+    ports:
+      - "4239:4239"    # VTY interface
+      - "2905:2905"    # M3UA
+      - "14001:14001"  # SCCP
+    volumes:
+      - ./logs:/var/log/osmocom
+      - ./configs/osmo-stp.cfg:/etc/osmocom/osmo-stp.cfg
+    restart: unless-stopped
+    networks:
+      - ss7-network
+
+  # Home Location Register (HLR) - Subscriber database
+  osmo-hlr:
+    build:
+      context: .
+      dockerfile: Dockerfile.hlr
+    container_name: osmo-hlr
+    ports:
+      - "4258:4258"    # VTY interface
+    volumes:
+      - ./logs:/var/log/osmocom
+      - ./configs/osmo-hlr.cfg:/etc/osmocom/osmo-hlr.cfg
+      - ./data/hlr.db:/var/lib/osmocom/hlr.db
+    depends_on:
+      - osmo-stp
+    restart: unless-stopped
+    networks:
+      - ss7-network
+
+  # Mobile Switching Center (MSC) - Call/SMS routing
+  osmo-msc:
+    build:
+      context: .
+      dockerfile: Dockerfile.msc
+    container_name: osmo-msc
+    ports:
+      - "4254:4254"    # VTY interface
+    volumes:
+      - ./logs:/var/log/osmocom
+      - ./configs/osmo-msc.cfg:/etc/osmocom/osmo-msc.cfg
+    depends_on:
+      - osmo-stp
+      - osmo-hlr
+    restart: unless-stopped
+    networks:
+      - ss7-network
+
+  # SMS Center (SMSC) - SMS store and forward
+  osmo-smsc:
+    build:
+      context: .
+      dockerfile: Dockerfile.smsc
+    container_name: osmo-smsc
+    ports:
+      - "4259:4259"    # VTY interface
+      - "2775:2775"    # SMPP interface
+    volumes:
+      - ./logs:/var/log/osmocom
+      - ./configs/osmo-smsc.cfg:/etc/osmocom/osmo-smsc.cfg
+      - ./data/smsc.db:/var/lib/osmocom/smsc.db
+    depends_on:
+      - osmo-stp
+      - osmo-hlr
+      - osmo-msc
+    restart: unless-stopped
+    networks:
+      - ss7-network
+
+  # Base Station Controller (BSC) - Radio network control
+  osmo-bsc:
+    build:
+      context: .
+      dockerfile: Dockerfile.bsc
+    container_name: osmo-bsc
+    ports:
+      - "4242:4242"    # VTY interface
+      - "5000:5000"    # A interface (to MSC)
+    volumes:
+      - ./logs:/var/log/osmocom
+      - ./configs/osmo-bsc.cfg:/etc/osmocom/osmo-bsc.cfg
+    depends_on:
+      - osmo-msc
+    restart: unless-stopped
+    networks:
+      - ss7-network
+
+  # Base Transceiver Station (BTS) - Radio interface
+  osmo-bts:
+    build:
+      context: .
+      dockerfile: Dockerfile.bts
+    container_name: osmo-bts
+    ports:
+      - "4241:4241"    # VTY interface
+    volumes:
+      - ./logs:/var/log/osmocom
+      - ./configs/osmo-bts.cfg:/etc/osmocom/osmo-bts.cfg
+    depends_on:
+      - osmo-bsc
+    restart: unless-stopped
+    networks:
+      - ss7-network
+
+  # GPRS Support Node (SGSN) - Packet data
+  osmo-sgsn:
+    build:
+      context: .
+      dockerfile: Dockerfile.sgsn
+    container_name: osmo-sgsn
+    ports:
+      - "4246:4246"    # VTY interface
+    volumes:
+      - ./logs:/var/log/osmocom
+      - ./configs/osmo-sgsn.cfg:/etc/osmocom/osmo-sgsn.cfg
+    depends_on:
+      - osmo-stp
+      - osmo-hlr
+    restart: unless-stopped
+    networks:
+      - ss7-network
+
+  # Gateway GPRS Support Node (GGSN) - Internet gateway
+  osmo-ggsn:
+    build:
+      context: .
+      dockerfile: Dockerfile.ggsn
+    container_name: osmo-ggsn
+    ports:
+      - "4260:4260"    # VTY interface
+      - "2152:2152/udp" # GTP-U
+    volumes:
+      - ./logs:/var/log/osmocom
+      - ./configs/osmo-ggsn.cfg:/etc/osmocom/osmo-ggsn.cfg
+    depends_on:
+      - osmo-sgsn
+    restart: unless-stopped
+    networks:
+      - ss7-network
+
+  # Enhanced VTY Proxy (updated for complete stack)
+  vty-proxy:
+    build:
+      context: .
+      dockerfile: Dockerfile.proxy-enhanced
+    container_name: vty-proxy
+    ports:
+      - "5000:5000"    # VTY Proxy API
+    depends_on:
+      - osmo-stp
+      - osmo-hlr
+      - osmo-msc
+      - osmo-smsc
+    environment:
+      - STP_HOST=osmo-stp
+      - HLR_HOST=osmo-hlr
+      - MSC_HOST=osmo-msc
+      - SMSC_HOST=osmo-smsc
+    restart: unless-stopped
+    networks:
+      - ss7-network
+
+  # Enhanced Web Dashboard
+  web-dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.dashboard-enhanced
+    container_name: ss7-dashboard
+    ports:
+      - "8888:80"      # Web Dashboard
+    depends_on:
+      - vty-proxy
+    restart: unless-stopped
+    networks:
+      - ss7-network
+
+  # Real SMS Simulator with full stack integration
+  sms-simulator:
+    build:
+      context: .
+      dockerfile: Dockerfile.sms-enhanced
+    container_name: sms-simulator
+    ports:
+      - "9999:80"      # SMS Simulator Interface
+      - "2776:2776"    # SMPP client interface
+    depends_on:
+      - osmo-smsc
+      - vty-proxy
+    restart: unless-stopped
+    networks:
+      - ss7-network
+
+  # Mobile Equipment Simulator (for testing)
+  mobile-simulator:
+    build:
+      context: .
+      dockerfile: Dockerfile.mobile-sim
+    container_name: mobile-simulator
+    ports:
+      - "7777:80"      # Mobile sim interface
+    depends_on:
+      - osmo-bts
+      - osmo-msc
+    restart: unless-stopped
+    networks:
+      - ss7-network
+
+  # Network monitoring and management
+  network-monitor:
+    build:
+      context: .
+      dockerfile: Dockerfile.monitor
+    container_name: network-monitor
+    ports:
+      - "6666:80"      # Monitoring interface
+    depends_on:
+      - osmo-stp
+      - osmo-hlr
+      - osmo-msc
+      - osmo-smsc
+    volumes:
+      - ./logs:/var/log/osmocom:ro
+    restart: unless-stopped
+    networks:
+      - ss7-network
+
+networks:
+  ss7-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

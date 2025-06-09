@@ -1,0 +1,82 @@
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    autoconf \
+    automake \
+    libtool \
+    pkg-config \
+    git \
+    libtalloc-dev \
+    libpcsclite-dev \
+    libortp-dev \
+    libsctp-dev \
+    libmnl-dev \
+    libdbi-dev \
+    libdbd-sqlite3 \
+    libsqlite3-dev \
+    libc-ares-dev \
+    libgnutls28-dev \
+    libssl-dev \
+    liburing-dev \
+    libsystemd-dev \
+    libusb-1.0-0-dev \
+    telnet \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt/osmocom
+
+# Build core dependencies in correct order
+RUN git clone https://gitea.osmocom.org/osmocom/libosmocore.git && \
+    cd libosmocore && \
+    autoreconf -fi && \
+    ./configure --prefix=/usr/local --disable-uring --disable-pcsc && \
+    make -j$(nproc) && make install && ldconfig
+
+RUN git clone https://gitea.osmocom.org/osmocom/libosmo-netif.git && \
+    cd libosmo-netif && \
+    autoreconf -fi && \
+    ./configure --prefix=/usr/local && \
+    make -j$(nproc) && make install && ldconfig
+
+RUN git clone https://gitea.osmocom.org/osmocom/libosmo-abis.git && \
+    cd libosmo-abis && \
+    autoreconf -fi && \
+    ./configure --disable-dahdi --prefix=/usr/local && \
+    make -j$(nproc) && make install && ldconfig
+
+RUN git clone https://gitea.osmocom.org/osmocom/libosmo-sccp.git && \
+    cd libosmo-sccp && \
+    autoreconf -fi && \
+    ./configure --prefix=/usr/local && \
+    make -j$(nproc) && make install && ldconfig
+
+# Build libosmo-mgcp-client (needed for MSC)
+RUN git clone https://gitea.osmocom.org/osmocom/libosmo-mgcp-client.git && \
+    cd libosmo-mgcp-client && \
+    autoreconf -fi && \
+    ./configure --prefix=/usr/local && \
+    make -j$(nproc) && make install && ldconfig
+
+# Build osmo-msc
+RUN git clone https://gitea.osmocom.org/osmocom/osmo-msc.git && \
+    cd osmo-msc && \
+    autoreconf -fi && \
+    ./configure --prefix=/usr/local && \
+    make -j$(nproc) && make install && ldconfig
+
+# Create directories
+RUN mkdir -p /etc/osmocom
+
+# Copy configuration
+COPY configs/osmo-msc.cfg /etc/osmocom/
+
+# Expose VTY port
+EXPOSE 4254
+
+# Run MSC
+CMD ["/usr/local/bin/osmo-msc", "-c", "/etc/osmocom/osmo-msc.cfg"]

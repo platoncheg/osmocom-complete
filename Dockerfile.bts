@@ -1,0 +1,46 @@
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y \
+    build-essential autoconf automake libtool pkg-config git \
+    libtalloc-dev libpcsclite-dev libortp-dev libsctp-dev \
+    libmnl-dev libdbi-dev libdbd-sqlite3 libsqlite3-dev \
+    libc-ares-dev libgnutls28-dev libssl-dev liburing-dev \
+    libsystemd-dev libusb-1.0-0-dev telnet wget \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt/osmocom
+
+# Build dependencies
+RUN git clone https://gitea.osmocom.org/osmocom/libosmocore.git && \
+    cd libosmocore && autoreconf -fi && \
+    ./configure --prefix=/usr/local --disable-uring --disable-pcsc && \
+    make -j$(nproc) && make install && ldconfig
+
+RUN git clone https://gitea.osmocom.org/osmocom/libosmo-netif.git && \
+    cd libosmo-netif && autoreconf -fi && \
+    ./configure --prefix=/usr/local && \
+    make -j$(nproc) && make install && ldconfig
+
+RUN git clone https://gitea.osmocom.org/osmocom/libosmo-sccp.git && \
+    cd libosmo-sccp && autoreconf -fi && \
+    ./configure --prefix=/usr/local && \
+    make -j$(nproc) && make install && ldconfig
+
+RUN git clone https://gitea.osmocom.org/osmocom/libosmo-mgcp-client.git && \
+    cd libosmo-mgcp-client && autoreconf -fi && \
+    ./configure --prefix=/usr/local && \
+    make -j$(nproc) && make install && ldconfig
+
+# Build BSC
+RUN git clone https://gitea.osmocom.org/osmocom/osmo-bsc.git && \
+    cd osmo-bsc && autoreconf -fi && \
+    ./configure --prefix=/usr/local && \
+    make -j$(nproc) && make install && ldconfig
+
+RUN mkdir -p /etc/osmocom
+COPY configs/osmo-bsc.cfg /etc/osmocom/
+
+EXPOSE 4242 5000
+CMD ["/usr/local/bin/osmo-bsc", "-c", "/etc/osmocom/osmo-bsc.cfg"]
