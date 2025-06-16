@@ -1,6 +1,10 @@
 #!/bin/bash
 
-# Complete Osmocom Mobile Network Shutdown Script
+#
+# Osmocom Complete Stack - Shutdown Script
+# Gracefully stop all services in reverse dependency order
+#
+
 set -e
 
 # Colors for output
@@ -8,287 +12,346 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
-echo -e "${CYAN}🛑 Shutting down Complete Osmocom Mobile Network...${NC}"
+# Configuration
+COMPOSE_FILE="docker-compose.yml"
+PROJECT_NAME="osmocom-complete"
 
-# Function to gracefully stop a service
-graceful_stop() {
+# Helper functions
+log_info() {
+    echo -e "${BLUE}[INFO]${NC} $1"
+}
+
+log_success() {
+    echo -e "${GREEN}[SUCCESS]${NC} $1"
+}
+
+log_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $1"
+}
+
+log_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
+
+print_header() {
+    echo ""
+    echo "🛑 Osmocom Complete Stack - Shutdown"
+    echo "====================================="
+    echo ""
+}
+
+check_running_services() {
+    log_info "Checking running services..."
+    
+    local running_services
+    running_services=$(docker-compose ps --services --filter "status=running" 2>/dev/null || echo "")
+    
+    if [ -z "$running_services" ]; then
+        log_warning "No services are currently running"
+        return 1
+    fi
+    
+    echo "Running services:"
+    echo "$running_services" | while read -r service; do
+        echo "  - $service"
+    done
+    echo ""
+    
+    return 0
+}
+
+wait_for_service_stop() {
     local service=$1
     local timeout=${2:-30}
     
-    echo -e "${BLUE}📴 Stopping $service...${NC}"
+    log_info "Waiting for $service to stop..."
     
-    if docker-compose -f docker-compose-complete.yml ps | grep -q "$service.*Up"; then
-        # Send graceful shutdown signal
-        docker-compose -f docker-compose-complete.yml stop -t $timeout $service
-        
-        # Check if stopped successfully
-        if docker-compose -f docker-compose-complete.yml ps | grep -q "$service.*Up"; then
-            echo -e "${YELLOW}⚠️  $service did not stop gracefully, forcing shutdown...${NC}"
-            docker-compose -f docker-compose-complete.yml kill $service
-        else
-            echo -e "${GREEN}✅ $service stopped successfully${NC}"
+    local counter=0
+    while [ $counter -lt $timeout ]; do
+        if ! docker-compose ps $service | grep -q "Up"; then
+            log_success "$service stopped"
+            return 0
         fi
-    else
-        echo -e "${YELLOW}⚠️  $service was not running${NC}"
-    fi
-}
-
-# Function to save service data
-backup_data() {
-    echo -e "${BLUE}💾 Backing up service data...${NC}"
-    
-    # Create backup directory with timestamp
-    BACKUP_DIR="backup_$(date +%Y%m%d_%H%M%S)"
-    mkdir -p "$BACKUP_DIR"
-    
-    # Backup HLR database
-    if docker-compose -f docker-compose-complete.yml ps | grep -q "osmo-hlr.*Up"; then
-        echo -e "${CYAN}   📋 Backing up HLR subscriber database...${NC}"
-        docker-compose -f docker-compose-complete.yml exec -T osmo-hlr \
-            sqlite3 /var/lib/osmocom/hlr.db .dump > "$BACKUP_DIR/hlr_backup.sql" 2>/dev/null || \
-            echo -e "${YELLOW}   ⚠️  Could not backup HLR database${NC}"
-    fi
-    
-    # Backup SMSC database
-    if docker-compose -f docker-compose-complete.yml ps | grep -q "osmo-smsc.*Up"; then
-        echo -e "${CYAN}   📨 Backing up SMSC message database...${NC}"
-        docker-compose -f docker-compose-complete.yml exec -T osmo-smsc \
-            sqlite3 /var/lib/osmocom/smsc.db .dump > "$BACKUP_DIR/smsc_backup.sql" 2>/dev/null || \
-            echo -e "${YELLOW}   ⚠️  Could not backup SMSC database${NC}"
-    fi
-    
-    # Backup configuration files
-    echo -e "${CYAN}   ⚙️  Backing up configuration files...${NC}"
-    cp -r configs/ "$BACKUP_DIR/" 2>/dev/null || echo -e "${YELLOW}   ⚠️  Could not backup configs${NC}"
-    
-    # Backup logs
-    echo -e "${CYAN}   📝 Backing up log files...${NC}"
-    cp -r logs/ "$BACKUP_DIR/" 2>/dev/null || echo -e "${YELLOW}   ⚠️  Could not backup logs${NC}"
-    
-    echo -e "${GREEN}✅ Data backed up to: $BACKUP_DIR${NC}"
-}
-
-# Function to collect network statistics
-collect_stats() {
-    echo -e "${BLUE}📊 Collecting final network statistics...${NC}"
-    
-    STATS_FILE="network_stats_$(date +%Y%m%d_%H%M%S).txt"
-    
-    {
-        echo "=== OSMOCOM MOBILE NETWORK SHUTDOWN REPORT ==="
-        echo "Shutdown Time: $(date)"
-        echo "Duration: Network was running since last deployment"
-        echo ""
         
-        echo "=== CONTAINER STATUS ==="
-        docker-compose -f docker-compose-complete.yml ps || true
-        echo ""
+        sleep 1
+        counter=$((counter + 1))
         
-        echo "=== FINAL VTY STATUS ==="
-        echo "--- STP Status ---"
-        echo "show cs7 instance 0" | timeout 5 nc localhost 4239 2>/dev/null || echo "STP not responding"
-        echo ""
-        
-        echo "--- HLR Subscriber Count ---"
-        docker-compose -f docker-compose-complete.yml exec -T osmo-hlr \
-            sqlite3 /var/lib/osmocom/hlr.db "SELECT COUNT(*) FROM subscriber;" 2>/dev/null || echo "HLR not accessible"
-        echo ""
-        
-        echo "--- SMSC Message Count ---"
-        docker-compose -f docker-compose-complete.yml exec -T osmo-smsc \
-            sqlite3 /var/lib/osmocom/smsc.db "SELECT COUNT(*) FROM sms;" 2>/dev/null || echo "SMSC not accessible"
-        echo ""
-        
-        echo "=== RESOURCE USAGE ==="
-        docker stats --no-stream 2>/dev/null || echo "Could not collect resource stats"
-        echo ""
-        
-        echo "=== LOG SUMMARY ==="
-        echo "Recent log entries from each service:"
-        for service in osmo-stp osmo-hlr osmo-msc osmo-smsc; do
-            echo "--- $service (last 5 lines) ---"
-            docker-compose -f docker-compose-complete.yml logs --tail=5 $service 2>/dev/null || echo "$service logs not available"
-            echo ""
-        done
-        
-    } > "$STATS_FILE"
-    
-    echo -e "${GREEN}✅ Network statistics saved to: $STATS_FILE${NC}"
-}
-
-# Main shutdown sequence
-main() {
-    # Parse command line arguments
-    FORCE_SHUTDOWN=false
-    SKIP_BACKUP=false
-    SKIP_STATS=false
-    
-    while [[ $# -gt 0 ]]; do
-        case $1 in
-            --force|-f)
-                FORCE_SHUTDOWN=true
-                shift
-                ;;
-            --no-backup)
-                SKIP_BACKUP=true
-                shift
-                ;;
-            --no-stats)
-                SKIP_STATS=true
-                shift
-                ;;
-            --help|-h)
-                echo "Usage: $0 [OPTIONS]"
-                echo ""
-                echo "Options:"
-                echo "  -f, --force      Force immediate shutdown without graceful stop"
-                echo "  --no-backup      Skip data backup"
-                echo "  --no-stats       Skip statistics collection"
-                echo "  -h, --help       Show this help message"
-                echo ""
-                echo "Examples:"
-                echo "  $0                    # Normal graceful shutdown with backup"
-                echo "  $0 --force           # Force immediate shutdown"
-                echo "  $0 --no-backup       # Shutdown without backup"
-                exit 0
-                ;;
-            *)
-                echo -e "${RED}❌ Unknown option: $1${NC}"
-                echo "Use --help for usage information"
-                exit 1
-                ;;
-        esac
+        # Show progress every 5 seconds
+        if [ $((counter % 5)) -eq 0 ]; then
+            log_info "Still waiting for $service to stop... (${counter}s/${timeout}s)"
+        fi
     done
     
-    # Show current network status
-    echo -e "${BLUE}📋 Current network status:${NC}"
-    docker-compose -f docker-compose-complete.yml ps 2>/dev/null || {
-        echo -e "${YELLOW}⚠️  Could not get container status${NC}"
-    }
-    echo ""
+    log_warning "$service did not stop gracefully within ${timeout}s"
+    return 1
+}
+
+stop_web_services() {
+    log_info "Stopping web and management services..."
     
-    # Confirm shutdown unless forced
-    if [ "$FORCE_SHUTDOWN" = false ]; then
-        echo -e "${YELLOW}⚠️  This will shutdown the complete mobile network including:${NC}"
-        echo "   - All SS7 signaling (STP)"
-        echo "   - Subscriber database (HLR)"
-        echo "   - SMS services (SMSC)"
-        echo "   - Mobile switching (MSC)"
-        echo "   - Base stations (BSC/BTS)"
-        echo "   - Packet core (SGSN/GGSN)"
-        echo "   - Management interfaces"
-        echo ""
-        read -p "Are you sure you want to continue? (y/N): " -n 1 -r
+    # Stop web interfaces first (least critical)
+    services=("sms-simulator" "web-dashboard" "vty-proxy")
+    
+    for service in "${services[@]}"; do
+        if docker-compose ps $service | grep -q "Up"; then
+            log_info "Stopping $service..."
+            docker-compose stop $service
+            wait_for_service_stop $service 15
+        fi
+    done
+    
+    log_success "Web services stopped"
+}
+
+stop_telecom_services() {
+    log_info "Stopping telecom services..."
+    
+    # Stop BSC first (depends on MSC)
+    if docker-compose ps osmo-bsc | grep -q "Up"; then
+        log_info "Stopping BSC (Base Station Controller)..."
+        docker-compose stop osmo-bsc
+        wait_for_service_stop osmo-bsc 20
+    fi
+    
+    # Then stop MSC
+    if docker-compose ps osmo-msc | grep -q "Up"; then
+        log_info "Stopping MSC (Mobile Switching Center with SMSC)..."
+        docker-compose stop osmo-msc
+        wait_for_service_stop osmo-msc 25
+    fi
+    
+    log_success "Telecom services stopped"
+}
+
+stop_core_services() {
+    log_info "Stopping core network services..."
+    
+    # Stop core services in reverse dependency order
+    services=("osmo-mgw" "osmo-hlr" "osmo-stp")
+    
+    for service in "${services[@]}"; do
+        if docker-compose ps $service | grep -q "Up"; then
+            case $service in
+                "osmo-mgw")
+                    log_info "Stopping MGW (Media Gateway)..."
+                    ;;
+                "osmo-hlr")
+                    log_info "Stopping HLR (Home Location Register)..."
+                    ;;
+                "osmo-stp")
+                    log_info "Stopping STP (SS7 Signaling Transfer Point)..."
+                    ;;
+            esac
+            
+            docker-compose stop $service
+            wait_for_service_stop $service 20
+        fi
+    done
+    
+    log_success "Core services stopped"
+}
+
+force_stop_all() {
+    log_warning "Force stopping all containers..."
+    
+    docker-compose kill
+    docker-compose down
+    
+    log_success "All containers force stopped"
+}
+
+cleanup_containers() {
+    log_info "Cleaning up stopped containers..."
+    
+    # Remove stopped containers
+    docker-compose down --remove-orphans
+    
+    log_success "Container cleanup completed"
+}
+
+cleanup_networks() {
+    log_info "Cleaning up Docker networks..."
+    
+    # Remove project networks
+    docker network ls --filter "name=${PROJECT_NAME}" --format "{{.Name}}" | while read -r network; do
+        if [ -n "$network" ]; then
+            log_info "Removing network: $network"
+            docker network rm "$network" 2>/dev/null || log_warning "Could not remove network: $network"
+        fi
+    done
+    
+    # Prune unused networks
+    docker network prune -f >/dev/null 2>&1
+    
+    log_success "Network cleanup completed"
+}
+
+cleanup_volumes() {
+    log_info "Cleaning up Docker volumes..."
+    
+    # List project volumes
+    local volumes
+    volumes=$(docker volume ls --filter "name=${PROJECT_NAME}" --format "{{.Name}}" 2>/dev/null || echo "")
+    
+    if [ -n "$volumes" ]; then
+        echo "Project volumes found:"
+        echo "$volumes" | while read -r volume; do
+            echo "  - $volume"
+        done
         echo ""
         
+        read -p "Remove project volumes? (y/N): " -n 1 -r
+        echo ""
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            echo "$volumes" | while read -r volume; do
+                log_info "Removing volume: $volume"
+                docker volume rm "$volume" 2>/dev/null || log_warning "Could not remove volume: $volume"
+            done
+            log_success "Volume cleanup completed"
+        else
+            log_info "Volume cleanup skipped"
+        fi
+    else
+        log_info "No project volumes found"
+    fi
+}
+
+show_final_status() {
+    log_info "Final status check..."
+    
+    local running_containers
+    running_containers=$(docker-compose ps --services --filter "status=running" 2>/dev/null || echo "")
+    
+    if [ -z "$running_containers" ]; then
+        echo ""
+        echo "🎉 Shutdown completed successfully!"
+        echo ""
+        echo "All Osmocom services have been stopped."
+        echo ""
+        echo "To start the stack again:"
+        echo "  ./startup.sh"
+        echo ""
+        echo "To deploy from scratch:"
+        echo "  ./deploy.sh"
+        echo ""
+    else
+        echo ""
+        echo "⚠️  Some containers are still running:"
+        echo "$running_containers"
+        echo ""
+        echo "You may need to force stop them:"
+        echo "  ./shutdown.sh --force"
+        echo ""
+    fi
+}
+
+# Main shutdown function
+main() {
+    print_header
+    
+    if ! check_running_services; then
+        echo "Nothing to shutdown."
+        exit 0
+    fi
+    
+    # Ask for confirmation unless forced
+    if [ "${1:-}" != "--force" ] && [ "${1:-}" != "--yes" ]; then
+        read -p "Are you sure you want to shutdown all Osmocom services? (y/N): " -n 1 -r
+        echo ""
         if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-            echo -e "${GREEN}✅ Shutdown cancelled${NC}"
+            log_info "Shutdown cancelled"
             exit 0
         fi
     fi
     
-    # Collect statistics before shutdown
-    if [ "$SKIP_STATS" = false ]; then
-        collect_stats
-    fi
+    # Graceful shutdown in reverse dependency order
+    stop_web_services
+    stop_telecom_services
+    stop_core_services
     
-    # Backup data before shutdown
-    if [ "$SKIP_BACKUP" = false ]; then
-        backup_data
-    fi
+    # Final cleanup
+    cleanup_containers
     
-    echo -e "\n${BLUE}🛑 Beginning network shutdown sequence...${NC}"
-    
-    if [ "$FORCE_SHUTDOWN" = true ]; then
-        echo -e "${RED}⚡ FORCE MODE: Immediate shutdown${NC}"
-        docker-compose -f docker-compose-complete.yml down --timeout 10
-    else
-        echo -e "${BLUE}🕐 GRACEFUL MODE: Stopping services in dependency order${NC}"
-        
-        # Shutdown in reverse dependency order
-        echo -e "\n${CYAN}Phase 1: Management interfaces${NC}"
-        graceful_stop "web-dashboard" 10
-        graceful_stop "sms-simulator" 10
-        graceful_stop "mobile-simulator" 10
-        graceful_stop "network-monitor" 10
-        graceful_stop "vty-proxy" 10
-        
-        echo -e "\n${CYAN}Phase 2: Access network${NC}"
-        graceful_stop "osmo-bts" 15
-        graceful_stop "osmo-bsc" 15
-        
-        echo -e "\n${CYAN}Phase 3: Packet core${NC}"
-        graceful_stop "osmo-ggsn" 15
-        graceful_stop "osmo-sgsn" 15
-        
-        echo -e "\n${CYAN}Phase 4: Core network services${NC}"
-        graceful_stop "osmo-smsc" 20
-        graceful_stop "osmo-msc" 20
-        
-        echo -e "\n${CYAN}Phase 5: Subscriber database${NC}"
-        graceful_stop "osmo-hlr" 20
-        
-        echo -e "\n${CYAN}Phase 6: SS7 signaling${NC}"
-        graceful_stop "osmo-stp" 25
-        
-        # Clean up any remaining containers
-        echo -e "\n${BLUE}🧹 Cleaning up remaining containers...${NC}"
-        docker-compose -f docker-compose-complete.yml down --remove-orphans
-    fi
-    
-    # Verify shutdown
-    echo -e "\n${BLUE}🔍 Verifying shutdown...${NC}"
-    REMAINING=$(docker-compose -f docker-compose-complete.yml ps -q 2>/dev/null | wc -l)
-    
-    if [ "$REMAINING" -eq 0 ]; then
-        echo -e "${GREEN}✅ All services stopped successfully${NC}"
-    else
-        echo -e "${YELLOW}⚠️  $REMAINING containers still running${NC}"
-        docker-compose -f docker-compose-complete.yml ps
-    fi
-    
-    # Clean up networks
-    echo -e "\n${BLUE}🌐 Cleaning up networks...${NC}"
-    docker-compose -f docker-compose-complete.yml down --volumes --remove-orphans 2>/dev/null || true
-    
-    # Final status
-    echo -e "\n${GREEN}🎉 Mobile network shutdown complete!${NC}"
-    echo ""
-    echo -e "${BLUE}📁 Files preserved:${NC}"
-    [ "$SKIP_BACKUP" = false ] && echo "   - Data backup: $(ls -t backup_* 2>/dev/null | head -1 || echo 'No backup created')"
-    [ "$SKIP_STATS" = false ] && echo "   - Statistics: $(ls -t network_stats_* 2>/dev/null | head -1 || echo 'No stats collected')"
-    echo "   - Configuration: configs/ directory"
-    echo "   - Logs: logs/ directory"
-    echo "   - Databases: data/ directory"
-    echo ""
-    echo -e "${BLUE}🚀 To restart the network:${NC}"
-    echo "   ./deploy-complete.sh"
-    echo ""
-    echo -e "${BLUE}📊 To restore from backup:${NC}"
-    echo "   # Restore HLR database:"
-    echo "   cat backup_*/hlr_backup.sql | docker-compose exec -T osmo-hlr sqlite3 /var/lib/osmocom/hlr.db"
-    echo "   # Restore SMSC database:"
-    echo "   cat backup_*/smsc_backup.sql | docker-compose exec -T osmo-smsc sqlite3 /var/lib/osmocom/smsc.db"
+    show_final_status
 }
 
-# Handle interruption
-trap 'echo -e "\n${RED}🛑 Shutdown interrupted!${NC}"; exit 130' INT TERM
-
-# Check if docker-compose file exists
-if [ ! -f "docker-compose-complete.yml" ]; then
-    echo -e "${RED}❌ docker-compose-complete.yml not found!${NC}"
-    echo "Please run this script from the osmocom-complete directory"
-    exit 1
-fi
-
-# Check if Docker is running
-if ! docker info > /dev/null 2>&1; then
-    echo -e "${RED}❌ Docker is not running${NC}"
-    exit 1
-fi
-
-# Run main function
-main "$@"
+# Script options
+case "${1:-}" in
+    --help|-h)
+        echo "Osmocom Complete Stack - Shutdown Script"
+        echo ""
+        echo "Usage: $0 [OPTIONS]"
+        echo ""
+        echo "Options:"
+        echo "  --help, -h       Show this help message"
+        echo "  --force          Force immediate shutdown (no graceful stop)"
+        echo "  --yes            Skip confirmation prompt"
+        echo "  --clean          Also remove volumes and networks"
+        echo "  --web-only       Stop only web services (dashboard, simulator)"
+        echo "  --core-only      Stop only core services (keep web running)"
+        echo ""
+        echo "Examples:"
+        echo "  $0               # Graceful shutdown with confirmation"
+        echo "  $0 --yes         # Graceful shutdown without confirmation"
+        echo "  $0 --force       # Immediate force shutdown"
+        echo "  $0 --clean       # Shutdown and clean up volumes"
+        echo ""
+        exit 0
+        ;;
+    --force)
+        print_header
+        log_warning "Force shutdown initiated"
+        force_stop_all
+        cleanup_containers
+        show_final_status
+        ;;
+    --yes)
+        main --yes
+        ;;
+    --clean)
+        print_header
+        log_info "Shutdown with cleanup initiated"
+        
+        if check_running_services; then
+            main --yes
+        fi
+        
+        cleanup_networks
+        cleanup_volumes
+        
+        log_success "Complete cleanup finished"
+        ;;
+    --web-only)
+        print_header
+        log_info "Stopping web services only..."
+        stop_web_services
+        echo ""
+        echo "Web services stopped. Core network services are still running."
+        echo "Access via VTY: telnet localhost 4239/4254/4242/4258/2427"
+        ;;
+    --core-only)
+        print_header
+        log_info "Stopping core services only..."
+        
+        read -p "This will stop core services but may leave web services in error state. Continue? (y/N): " -n 1 -r
+        echo ""
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            stop_core_services
+            echo ""
+            echo "Core services stopped. Web services may show errors."
+        else
+            log_info "Operation cancelled"
+        fi
+        ;;
+    "")
+        # Default behavior - graceful shutdown with confirmation
+        main
+        ;;
+    *)
+        log_error "Unknown option: $1"
+        echo "Use --help for usage information"
+        exit 1
+        ;;
+esac

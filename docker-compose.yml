@@ -1,80 +1,287 @@
 version: '3.8'
 
-services:
-  osmo-stp:
-    build: .
-    container_name: osmo-stp
-    ports:
-      - "4239:4239"    # VTY interface
-      - "2905:2905"    # M3UA
-      - "14001:14001"  # SCCP
-    volumes:
-      - ./logs:/var/log/osmocom
-    restart: unless-stopped
-    networks:
-      - ss7-network
-
-  # VTY Proxy Server (enables real dashboard connection)
-  vty-proxy:
-    build:
-      context: .
-      dockerfile: Dockerfile.proxy
-    container_name: vty-proxy
-    ports:
-      - "5000:5000"    # VTY Proxy API
-    depends_on:
-      - osmo-stp
-    environment:
-      - VTY_HOST=osmo-stp
-      - VTY_PORT=4239
-    restart: unless-stopped
-    networks:
-      - ss7-network
-
-  # Web Dashboard (now with real VTY connection)
-  web-dashboard:
-    build:
-      context: .
-      dockerfile: Dockerfile.dashboard
-    container_name: ss7-dashboard
-    ports:
-      - "8888:80"      # Web Dashboard
-    depends_on:
-      - osmo-stp
-      - vty-proxy
-    restart: unless-stopped
-    networks:
-      - ss7-network
-
-  # SMS Simulator Web Interface
-  sms-simulator:
-    build:
-      context: .
-      dockerfile: Dockerfile.sms
-    container_name: sms-simulator
-    ports:
-      - "9999:80"      # SMS Simulator Interface
-    depends_on:
-      - osmo-stp
-    restart: unless-stopped
-    networks:
-      - ss7-network
-
-  # Optional: Add a test client container
-  osmo-test-client:
-    build: .
-    container_name: osmo-test-client
-    command: tail -f /dev/null  # Keep container running
-    depends_on:
-      - osmo-stp
-    networks:
-      - ss7-network
-    profiles:
-      - test
-
 networks:
-  ss7-network:
+  osmocom-network:
     driver: bridge
     ipam:
       config:
         - subnet: 172.20.0.0/16
+
+volumes:
+  osmocom-logs:
+    driver: local
+  hlr-data:
+    driver: local
+
+services:
+  # SS7 Signaling Transfer Point
+  osmo-stp:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.stp
+    container_name: osmo-stp
+    hostname: osmo-stp
+    networks:
+      osmocom-network:
+        ipv4_address: 172.20.0.10
+    ports:
+      - "4239:4239"   # VTY interface
+      - "2905:2905"   # M3UA SCTP
+      - "14001:14001" # SCCP
+    volumes:
+      - ./config/osmo-stp.cfg:/opt/osmocom/etc/osmo-stp.cfg:ro
+      - osmocom-logs:/opt/osmocom/logs
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.5'
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "4239"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    environment:
+      - OSMO_STP_POINT_CODE=0.23.1
+
+  # Home Location Register
+  osmo-hlr:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.hlr
+    container_name: osmo-hlr
+    hostname: osmo-hlr
+    networks:
+      osmocom-network:
+        ipv4_address: 172.20.0.20
+    ports:
+      - "4258:4258"  # VTY interface
+      - "4222:4222"  # GSUP
+    volumes:
+      - ./config/osmo-hlr.cfg:/opt/osmocom/etc/osmo-hlr.cfg:ro
+      - hlr-data:/opt/osmocom/data
+      - osmocom-logs:/opt/osmocom/logs
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.5'
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "4258"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    environment:
+      - OSMO_HLR_DB_PATH=/opt/osmocom/data/hlr.db
+
+  # Media Gateway
+  osmo-mgw:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.mgw
+    container_name: osmo-mgw
+    hostname: osmo-mgw
+    networks:
+      osmocom-network:
+        ipv4_address: 172.20.0.30
+    ports:
+      - "2427:2427"  # VTY interface
+      - "2728:2728"  # MGCP
+      - "16000-16099:16000-16099/udp"  # RTP ports
+    volumes:
+      - ./config/osmo-mgw.cfg:/opt/osmocom/etc/osmo-mgw.cfg:ro
+      - osmocom-logs:/opt/osmocom/logs
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '1.0'
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "2427"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Mobile Switching Center with integrated SMSC
+  osmo-msc:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.msc
+    container_name: osmo-msc
+    hostname: osmo-msc
+    networks:
+      osmocom-network:
+        ipv4_address: 172.20.0.40
+    ports:
+      - "4254:4254"  # VTY interface
+      - "2775:2775"  # SMPP (optional external SMSC)
+    volumes:
+      - ./config/osmo-msc.cfg:/opt/osmocom/etc/osmo-msc.cfg:ro
+      - osmocom-logs:/opt/osmocom/logs
+    depends_on:
+      - osmo-stp
+      - osmo-hlr
+      - osmo-mgw
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '1.0'
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "4254"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    environment:
+      - OSMO_MSC_POINT_CODE=0.23.2
+      - OSMO_HLR_ADDR=osmo-hlr
+      - OSMO_STP_ADDR=osmo-stp
+      - OSMO_MGW_ADDR=osmo-mgw
+
+  # Base Station Controller
+  osmo-bsc:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.bsc
+    container_name: osmo-bsc
+    hostname: osmo-bsc
+    networks:
+      osmocom-network:
+        ipv4_address: 172.20.0.50
+    ports:
+      - "4242:4242"  # VTY interface
+      - "3002:3002"  # Abis over IP
+    volumes:
+      - ./config/osmo-bsc.cfg:/opt/osmocom/etc/osmo-bsc.cfg:ro
+      - osmocom-logs:/opt/osmocom/logs
+    depends_on:
+      - osmo-stp
+      - osmo-msc
+    deploy:
+      resources:
+        limits:
+          memory: 384M
+          cpus: '0.75'
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "4242"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    environment:
+      - OSMO_BSC_POINT_CODE=0.23.3
+      - OSMO_MSC_ADDR=osmo-msc
+      - OSMO_STP_ADDR=osmo-stp
+
+  # VTY HTTP Proxy for web interface integration
+  vty-proxy:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.proxy
+    container_name: vty-proxy
+    hostname: vty-proxy
+    networks:
+      osmocom-network:
+        ipv4_address: 172.20.0.100
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./scripts/vty_proxy.py:/app/vty_proxy.py:ro
+      - osmocom-logs:/opt/osmocom/logs
+    depends_on:
+      - osmo-stp
+      - osmo-msc
+      - osmo-bsc
+      - osmo-hlr
+      - osmo-mgw
+    environment:
+      - FLASK_ENV=production
+      - OSMO_STP_HOST=osmo-stp
+      - OSMO_STP_PORT=4239
+      - OSMO_MSC_HOST=osmo-msc
+      - OSMO_MSC_PORT=4254
+      - OSMO_BSC_HOST=osmo-bsc
+      - OSMO_BSC_PORT=4242
+      - OSMO_HLR_HOST=osmo-hlr
+      - OSMO_HLR_PORT=4258
+      - OSMO_MGW_HOST=osmo-mgw
+      - OSMO_MGW_PORT=2427
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: '0.25'
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Web Dashboard for monitoring and management
+  web-dashboard:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.dashboard
+    container_name: web-dashboard
+    hostname: web-dashboard
+    networks:
+      osmocom-network:
+        ipv4_address: 172.20.0.110
+    ports:
+      - "8888:80"
+    volumes:
+      - ./web/dashboard.html:/usr/share/nginx/html/index.html:ro
+      - ./web/assets:/usr/share/nginx/html/assets:ro
+    depends_on:
+      - vty-proxy
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+          cpus: '0.1'
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # SMS Simulator and Testing Interface
+  sms-simulator:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.sms
+    container_name: sms-simulator
+    hostname: sms-simulator
+    networks:
+      osmocom-network:
+        ipv4_address: 172.20.0.120
+    ports:
+      - "9999:80"
+    volumes:
+      - ./web/sms_simulator.html:/usr/share/nginx/html/index.html:ro
+      - ./web/assets:/usr/share/nginx/html/assets:ro
+      - ./scripts/sms_simulator.py:/app/sms_simulator.py:ro
+    depends_on:
+      - vty-proxy
+      - osmo-msc
+    environment:
+      - VTY_PROXY_URL=http://vty-proxy:5000
+      - OSMO_MSC_HOST=osmo-msc
+      - OSMO_MSC_PORT=4254
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: '0.25'
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3

@@ -1,0 +1,66 @@
+FROM ubuntu:22.04
+
+LABEL maintainer="platoncheg"
+LABEL description="OsmoBSC - Base Station Controller"
+
+# Avoid interactive prompts during build
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install dependencies
+RUN apt-get update && apt-get install -y \
+    wget \
+    gnupg2 \
+    software-properties-common \
+    netcat \
+    && rm -rf /var/lib/apt/lists/*
+
+# Add Osmocom repository
+RUN wget -O - https://downloads.osmocom.org/packages/osmocom%3Alatest/Release.key | apt-key add -
+RUN echo "deb https://downloads.osmocom.org/packages/osmocom:/latest/xUbuntu_22.04/ ./" > /etc/apt/sources.list.d/osmocom-latest.list
+
+# Update and install OsmoBSC
+RUN apt-get update && apt-get install -y \
+    osmo-bsc \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create necessary directories
+RUN mkdir -p /opt/osmocom/etc /opt/osmocom/logs
+
+# Copy default configuration
+COPY config/osmo-bsc.cfg /opt/osmocom/etc/osmo-bsc.cfg
+
+# Create startup script
+RUN echo '#!/bin/bash\n\
+echo "Starting OsmoBSC..."\n\
+echo "Point Code: ${OSMO_BSC_POINT_CODE:-0.23.3}"\n\
+echo "MSC Address: ${OSMO_MSC_ADDR:-osmo-msc}"\n\
+echo "STP Address: ${OSMO_STP_ADDR:-osmo-stp}"\n\
+echo "Configuration: /opt/osmocom/etc/osmo-bsc.cfg"\n\
+echo "Abis Interface: Port 3002"\n\
+\n\
+# Wait for dependencies\n\
+echo "Waiting for STP..."\n\
+while ! nc -z ${OSMO_STP_ADDR:-osmo-stp} 4239; do sleep 1; done\n\
+echo "Waiting for MSC..."\n\
+while ! nc -z ${OSMO_MSC_ADDR:-osmo-msc} 4254; do sleep 1; done\n\
+\n\
+echo "Dependencies ready, starting BSC..."\n\
+exec osmo-bsc -c /opt/osmocom/etc/osmo-bsc.cfg' > /opt/osmocom/start.sh
+
+RUN chmod +x /opt/osmocom/start.sh
+
+# Expose ports
+EXPOSE 4242 3002
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD nc -z localhost 4242 || exit 1
+
+# Switch to non-root user
+RUN useradd -r -s /bin/false osmocom
+RUN chown -R osmocom:osmocom /opt/osmocom
+USER osmocom
+
+WORKDIR /opt/osmocom
+
+CMD ["/opt/osmocom/start.sh"]

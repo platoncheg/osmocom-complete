@@ -1,0 +1,65 @@
+FROM python:3.11-slim
+
+LABEL maintainer="platoncheg"
+LABEL description="VTY Proxy - HTTP to VTY Bridge"
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    netcat-traditional \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create app directory
+WORKDIR /app
+
+# Install Python dependencies
+RUN pip install --no-cache-dir \
+    flask==2.3.3 \
+    flask-cors==4.0.0 \
+    requests==2.31.0
+
+# Copy application
+COPY scripts/vty_proxy.py /app/vty_proxy.py
+
+# Create startup script
+RUN echo '#!/bin/bash\n\
+echo "Starting VTY Proxy..."\n\
+echo "HTTP Port: 5000"\n\
+echo "STP VTY: ${OSMO_STP_HOST:-osmo-stp}:${OSMO_STP_PORT:-4239}"\n\
+echo "MSC VTY: ${OSMO_MSC_HOST:-osmo-msc}:${OSMO_MSC_PORT:-4254}"\n\
+echo "BSC VTY: ${OSMO_BSC_HOST:-osmo-bsc}:${OSMO_BSC_PORT:-4242}"\n\
+echo "HLR VTY: ${OSMO_HLR_HOST:-osmo-hlr}:${OSMO_HLR_PORT:-4258}"\n\
+echo "MGW VTY: ${OSMO_MGW_HOST:-osmo-mgw}:${OSMO_MGW_PORT:-2427}"\n\
+\n\
+# Wait for core services\n\
+echo "Waiting for core services..."\n\
+for service in "stp mgw hlr msc bsc"; do\n\
+    case $service in\n\
+        "stp") host=${OSMO_STP_HOST:-osmo-stp}; port=${OSMO_STP_PORT:-4239};;\n\
+        "mgw") host=${OSMO_MGW_HOST:-osmo-mgw}; port=${OSMO_MGW_PORT:-2427};;\n\
+        "hlr") host=${OSMO_HLR_HOST:-osmo-hlr}; port=${OSMO_HLR_PORT:-4258};;\n\
+        "msc") host=${OSMO_MSC_HOST:-osmo-msc}; port=${OSMO_MSC_PORT:-4254};;\n\
+        "bsc") host=${OSMO_BSC_HOST:-osmo-bsc}; port=${OSMO_BSC_PORT:-4242};;\n\
+    esac\n\
+    echo "Waiting for $service ($host:$port)..."\n\
+    while ! nc -z $host $port; do sleep 2; done\n\
+done\n\
+\n\
+echo "All services ready, starting VTY Proxy..."\n\
+exec python3 /app/vty_proxy.py' > /app/start.sh
+
+RUN chmod +x /app/start.sh
+
+# Expose port
+EXPOSE 5000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:5000/health || exit 1
+
+# Create non-root user
+RUN useradd -r -s /bin/false appuser
+RUN chown -R appuser:appuser /app
+USER appuser
+
+CMD ["/app/start.sh"]
