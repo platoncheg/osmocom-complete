@@ -1,55 +1,26 @@
 FROM ubuntu:22.04
 
-LABEL maintainer="platoncheg"
-LABEL description="OsmoSTP - SS7 Signaling Transfer Point"
-
-# Avoid interactive prompts during build
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install dependencies
 RUN apt-get update && apt-get install -y \
     wget \
     gnupg2 \
     software-properties-common \
-    netcat \
+    apt-transport-https \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Add Osmocom repository
-RUN wget -O - https://downloads.osmocom.org/packages/osmocom%3Alatest/Release.key | apt-key add -
-RUN echo "deb https://downloads.osmocom.org/packages/osmocom:/latest/xUbuntu_22.04/ ./" > /etc/apt/sources.list.d/osmocom-latest.list
+# Add Osmocom repository with correct URL and GPG key
+RUN wget -O /etc/apt/trusted.gpg.d/osmocom.asc https://obs.osmocom.org/projects/osmocom/public_key
 
-# Update and install OsmoSTP
+RUN echo "deb [signed-by=/etc/apt/trusted.gpg.d/osmocom.asc] https://downloads.osmocom.org/packages/osmocom:/latest/xUbuntu_22.04/ ./" > /etc/apt/sources.list.d/osmocom.list
+
 RUN apt-get update && apt-get install -y \
     osmo-stp \
     && rm -rf /var/lib/apt/lists/*
 
-# Create necessary directories
-RUN mkdir -p /opt/osmocom/etc /opt/osmocom/logs
+COPY /config/osmo-stp.cfg /etc/osmocom/osmo-stp.cfg
 
-# Copy default configuration
-COPY config/osmo-stp.cfg /opt/osmocom/etc/osmo-stp.cfg
-
-# Create startup script
-RUN echo '#!/bin/bash\n\
-echo "Starting OsmoSTP..."\n\
-echo "Point Code: ${OSMO_STP_POINT_CODE:-0.23.1}"\n\
-echo "Configuration: /opt/osmocom/etc/osmo-stp.cfg"\n\
-exec osmo-stp -c /opt/osmocom/etc/osmo-stp.cfg' > /opt/osmocom/start.sh
-
-RUN chmod +x /opt/osmocom/start.sh
-
-# Expose ports
 EXPOSE 4239 2905 14001
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD nc -z localhost 4239 || exit 1
-
-# Switch to non-root user
-RUN useradd -r -s /bin/false osmocom
-RUN chown -R osmocom:osmocom /opt/osmocom
-USER osmocom
-
-WORKDIR /opt/osmocom
-
-CMD ["/opt/osmocom/start.sh"]
+CMD ["osmo-stp", "-c", "/etc/osmocom/osmo-stp.cfg"]

@@ -19,8 +19,6 @@ RUN apt-get update && apt-get install -y \
     osmo-bsc \
     && rm -rf /var/lib/apt/lists/*
 
-COPY /config/osmo-bsc.cfg /etc/osmocom/osmo-bsc.cfg
-
-EXPOSE 4242
+COPY osmo-bsc.cfg /etc/osmocom/osmo-bsc.cfg
 
 CMD ["osmo-bsc", "-c", "/etc/osmocom/osmo-bsc.cfg"]

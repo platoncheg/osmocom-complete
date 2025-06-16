@@ -16,11 +16,11 @@ RUN wget -O /etc/apt/trusted.gpg.d/osmocom.asc https://obs.osmocom.org/projects/
 RUN echo "deb [signed-by=/etc/apt/trusted.gpg.d/osmocom.asc] https://downloads.osmocom.org/packages/osmocom:/latest/xUbuntu_22.04/ ./" > /etc/apt/sources.list.d/osmocom.list
 
 RUN apt-get update && apt-get install -y \
-    osmo-bsc \
+    osmo-stp \
     && rm -rf /var/lib/apt/lists/*
 
-COPY /config/osmo-bsc.cfg /etc/osmocom/osmo-bsc.cfg
+COPY osmo-stp.cfg /etc/osmocom/osmo-stp.cfg
 
-EXPOSE 4242
+EXPOSE 4239 2905 14001
 
-CMD ["osmo-bsc", "-c", "/etc/osmocom/osmo-bsc.cfg"]
+CMD ["osmo-stp", "-c", "/etc/osmocom/osmo-stp.cfg"]

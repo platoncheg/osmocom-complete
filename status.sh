@@ -57,6 +57,156 @@ get_container_status() {
         if docker-compose ps $container | grep -q "healthy"; then
             echo "healthy"
         else
+            echo "running"
+        fi
+    elif docker-compose ps $container 2>/dev/null | grep -q "Exit"; then
+        echo "stopped"
+    else
+        echo "missing"
+    fi
+}
+
+check_port_connectivity() {
+    local host=${1:-localhost}
+    local port=$2
+    
+    if nc -z $host $port 2>/dev/null; then
+        echo "open"
+    else
+        echo "closed"
+    fi
+}
+
+get_uptime() {
+    local container=$1
+    local created_at
+    
+    created_at=$(docker inspect --format='{{.Created}}' "${PROJECT_NAME}_${container}_1" 2>/dev/null || echo "")
+    
+    if [ -n "$created_at" ]; then
+        # Convert to epoch time and calculate difference
+        local created_epoch
+        created_epoch=$(date -d "$created_at" +%s 2>/dev/null || echo "0")
+        local current_epoch
+        current_epoch=$(date +%s)
+        local diff=$((current_epoch - created_epoch))
+        
+        if [ $diff -gt 3600 ]; then
+            echo "$((diff / 3600))h $((diff % 3600 / 60))m"
+        elif [ $diff -gt 60 ]; then
+            echo "$((diff / 60))m $((diff % 60))s"
+        else
+            echo "${diff}s"
+        fi
+    else
+        echo "unknown"
+    fi
+}
+
+show_service_status() {
+    print_section "Service Status"
+    
+    # Service definitions: container:port:name:description
+    local services=(
+        "osmo-stp:4239:OsmoSTP:SS7 Signaling Transfer Point"
+        "osmo-hlr:4258:OsmoHLR:Home Location Register"
+        "osmo-mgw:2427:OsmoMGW:Media Gateway"
+        "osmo-msc:4254:OsmoMSC:Mobile Switching Center + SMSC"
+        "osmo-bsc:4242:OsmoBSC:Base Station Controller"
+        "vty-proxy:5000:VTY Proxy:HTTP-VTY Bridge"
+        "web-dashboard:8888:Web Dashboard:Monitoring Interface"
+        "sms-simulator:9999:SMS Simulator:Testing Interface"
+    )
+    
+    printf "%-15s %-12s %-8s %-8s %-10s %s\n" "SERVICE" "STATUS" "PORT" "HEALTH" "UPTIME" "DESCRIPTION"
+    printf "%-15s %-12s %-8s %-8s %-10s %s\n" "-------" "------" "----" "------" "------" "-----------"
+    
+    local healthy_count=0
+    local total_count=${#services[@]}
+    
+    for service_info in "${services[@]}"; do
+        IFS=':' read -r container port name description <<< "$service_info"
+        
+        local status
+        status=$(get_container_status $container)
+        
+        local port_status
+        port_status=$(check_port_connectivity localhost $port)
+        
+        local uptime
+        uptime=$(get_uptime $container)
+        
+        # Determine overall health
+        local health="unknown"
+        local status_color=$YELLOW
+        
+        case $status in
+            "healthy")
+                if [ "$port_status" = "open" ]; then
+                    health="healthy"
+                    status_color=$GREEN
+                    ((healthy_count++))
+                else
+                    health="degraded"
+                    status_color=$YELLOW
+                fi
+                ;;
+            "running")
+                if [ "$port_status" = "open" ]; then
+                    health="running"
+                    status_color=$BLUE
+                    ((healthy_count++))
+                else
+                    health="degraded"
+                    status_color=$YELLOW
+                fi
+                ;;
+            "stopped")
+                health="stopped"
+                status_color=$RED
+                ;;
+            "missing")
+                health="missing"
+                status_color=$RED
+                ;;
+        esac
+        
+        printf "${status_color}%-15s %-12s %-8s %-8s %-10s %s${NC}\n" \
+            "$name" "$status" "$port" "$port_status" "$uptime" "$description"
+    done
+    
+    echo ""
+    echo "Overall Health: $healthy_count/$total_count services operational"
+    
+    if [ $healthy_count -eq $total_count ]; then
+        echo -e "${GREEN}✓ All services are healthy${NC}"
+    elif [ $healthy_count -gt $((total_count / 2)) ]; then
+        echo -e "${YELLOW}⚠ Some services need attention${NC}"
+    else
+        echo -e "${RED}✗ Multiple services are down${NC}"
+    fi
+}
+
+show_network_status() {
+    print_section "Network Status"
+    
+    # Check Docker network
+    local network_name="${PROJECT_NAME}_osmocom-network"
+    if docker network inspect $network_name >/dev/null 2>&1; then
+        echo -e "${GREEN}✓${NC} Docker network '$network_name' exists"
+        
+        # Show network details
+        local subnet
+        subnet=$(docker network inspect $network_name --format '{{range .IPAM.Config}}{{.Subnet}}{{end}}' 2>/dev/null || echo "unknown")
+        echo "  Subnet: $subnet"
+        
+        # Show connected containers
+        local connected_containers
+        connected_containers=$(docker network inspect $network_name --format '{{range $k, $v := .Containers}}{{$v.Name}} {{end}}' 2>/dev/null || echo "")
+        if [ -n "$connected_containers" ]; then
+            echo "  Connected containers: $connected_containers"
+        fi
+    else
         echo -e "${RED}✗${NC} Docker network '$network_name' not found"
     fi
     
@@ -424,153 +574,3 @@ case "${1:-}" in
         exit 1
         ;;
 esac
-            echo "running"
-        fi
-    elif docker-compose ps $container 2>/dev/null | grep -q "Exit"; then
-        echo "stopped"
-    else
-        echo "missing"
-    fi
-}
-
-check_port_connectivity() {
-    local host=${1:-localhost}
-    local port=$2
-    
-    if nc -z $host $port 2>/dev/null; then
-        echo "open"
-    else
-        echo "closed"
-    fi
-}
-
-get_uptime() {
-    local container=$1
-    local created_at
-    
-    created_at=$(docker inspect --format='{{.Created}}' "${PROJECT_NAME}_${container}_1" 2>/dev/null || echo "")
-    
-    if [ -n "$created_at" ]; then
-        # Convert to epoch time and calculate difference
-        local created_epoch
-        created_epoch=$(date -d "$created_at" +%s 2>/dev/null || echo "0")
-        local current_epoch
-        current_epoch=$(date +%s)
-        local diff=$((current_epoch - created_epoch))
-        
-        if [ $diff -gt 3600 ]; then
-            echo "$((diff / 3600))h $((diff % 3600 / 60))m"
-        elif [ $diff -gt 60 ]; then
-            echo "$((diff / 60))m $((diff % 60))s"
-        else
-            echo "${diff}s"
-        fi
-    else
-        echo "unknown"
-    fi
-}
-
-show_service_status() {
-    print_section "Service Status"
-    
-    # Service definitions: container:port:name:description
-    local services=(
-        "osmo-stp:4239:OsmoSTP:SS7 Signaling Transfer Point"
-        "osmo-hlr:4258:OsmoHLR:Home Location Register"
-        "osmo-mgw:2427:OsmoMGW:Media Gateway"
-        "osmo-msc:4254:OsmoMSC:Mobile Switching Center + SMSC"
-        "osmo-bsc:4242:OsmoBSC:Base Station Controller"
-        "vty-proxy:5000:VTY Proxy:HTTP-VTY Bridge"
-        "web-dashboard:8888:Web Dashboard:Monitoring Interface"
-        "sms-simulator:9999:SMS Simulator:Testing Interface"
-    )
-    
-    printf "%-15s %-12s %-8s %-8s %-10s %s\n" "SERVICE" "STATUS" "PORT" "HEALTH" "UPTIME" "DESCRIPTION"
-    printf "%-15s %-12s %-8s %-8s %-10s %s\n" "-------" "------" "----" "------" "------" "-----------"
-    
-    local healthy_count=0
-    local total_count=${#services[@]}
-    
-    for service_info in "${services[@]}"; do
-        IFS=':' read -r container port name description <<< "$service_info"
-        
-        local status
-        status=$(get_container_status $container)
-        
-        local port_status
-        port_status=$(check_port_connectivity localhost $port)
-        
-        local uptime
-        uptime=$(get_uptime $container)
-        
-        # Determine overall health
-        local health="unknown"
-        local status_color=$YELLOW
-        
-        case $status in
-            "healthy")
-                if [ "$port_status" = "open" ]; then
-                    health="healthy"
-                    status_color=$GREEN
-                    ((healthy_count++))
-                else
-                    health="degraded"
-                    status_color=$YELLOW
-                fi
-                ;;
-            "running")
-                if [ "$port_status" = "open" ]; then
-                    health="running"
-                    status_color=$BLUE
-                    ((healthy_count++))
-                else
-                    health="degraded"
-                    status_color=$YELLOW
-                fi
-                ;;
-            "stopped")
-                health="stopped"
-                status_color=$RED
-                ;;
-            "missing")
-                health="missing"
-                status_color=$RED
-                ;;
-        esac
-        
-        printf "${status_color}%-15s %-12s %-8s %-8s %-10s %s${NC}\n" \
-            "$name" "$status" "$port" "$port_status" "$uptime" "$description"
-    done
-    
-    echo ""
-    echo "Overall Health: $healthy_count/$total_count services operational"
-    
-    if [ $healthy_count -eq $total_count ]; then
-        echo -e "${GREEN}✓ All services are healthy${NC}"
-    elif [ $healthy_count -gt $((total_count / 2)) ]; then
-        echo -e "${YELLOW}⚠ Some services need attention${NC}"
-    else
-        echo -e "${RED}✗ Multiple services are down${NC}"
-    fi
-}
-
-show_network_status() {
-    print_section "Network Status"
-    
-    # Check Docker network
-    local network_name="${PROJECT_NAME}_osmocom-network"
-    if docker network inspect $network_name >/dev/null 2>&1; then
-        echo -e "${GREEN}✓${NC} Docker network '$network_name' exists"
-        
-        # Show network details
-        local subnet
-        subnet=$(docker network inspect $network_name --format '{{range .IPAM.Config}}{{.Subnet}}{{end}}' 2>/dev/null || echo "unknown")
-        echo "  Subnet: $subnet"
-        
-        # Show connected containers
-        local connected_containers
-        connected_containers=$(docker network inspect $network_name --format '{{range $k, $v := .Containers}}{{$v.Name}} {{end}}' 2>/dev/null || echo "")
-        if [ -n "$connected_containers" ]; then
-            echo "  Connected containers: $connected_containers"
-        fi
-    else

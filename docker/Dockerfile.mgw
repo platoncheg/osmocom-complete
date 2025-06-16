@@ -1,58 +1,26 @@
 FROM ubuntu:22.04
 
-LABEL maintainer="platoncheg"
-LABEL description="OsmoMGW - Media Gateway"
-
-# Avoid interactive prompts during build
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install dependencies
 RUN apt-get update && apt-get install -y \
     wget \
     gnupg2 \
     software-properties-common \
-    netcat \
+    apt-transport-https \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Add Osmocom repository
-RUN wget -O - https://downloads.osmocom.org/packages/osmocom%3Alatest/Release.key | apt-key add -
-RUN echo "deb https://downloads.osmocom.org/packages/osmocom:/latest/xUbuntu_22.04/ ./" > /etc/apt/sources.list.d/osmocom-latest.list
+# Add Osmocom repository with correct URL and GPG key
+RUN wget -O /etc/apt/trusted.gpg.d/osmocom.asc https://obs.osmocom.org/projects/osmocom/public_key
 
-# Update and install OsmoMGW
+RUN echo "deb [signed-by=/etc/apt/trusted.gpg.d/osmocom.asc] https://downloads.osmocom.org/packages/osmocom:/latest/xUbuntu_22.04/ ./" > /etc/apt/sources.list.d/osmocom.list
+
 RUN apt-get update && apt-get install -y \
     osmo-mgw \
     && rm -rf /var/lib/apt/lists/*
 
-# Create necessary directories
-RUN mkdir -p /opt/osmocom/etc /opt/osmocom/logs
+COPY /config/osmo-mgw.cfg /etc/osmocom/osmo-mgw.cfg
 
-# Copy default configuration
-COPY config/osmo-mgw.cfg /opt/osmocom/etc/osmo-mgw.cfg
+EXPOSE 2427
 
-# Create startup script
-RUN echo '#!/bin/bash\n\
-echo "Starting OsmoMGW..."\n\
-echo "MGCP Port: 2728"\n\
-echo "RTP Ports: 16000-16099"\n\
-echo "Configuration: /opt/osmocom/etc/osmo-mgw.cfg"\n\
-echo "Media Handling: Voice call RTP streams"\n\
-\n\
-exec osmo-mgw -c /opt/osmocom/etc/osmo-mgw.cfg' > /opt/osmocom/start.sh
-
-RUN chmod +x /opt/osmocom/start.sh
-
-# Expose ports
-EXPOSE 2427 2728 16000-16099/udp
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD nc -z localhost 2427 || exit 1
-
-# Switch to non-root user
-RUN useradd -r -s /bin/false osmocom
-RUN chown -R osmocom:osmocom /opt/osmocom
-USER osmocom
-
-WORKDIR /opt/osmocom
-
-CMD ["/opt/osmocom/start.sh"]
+CMD ["osmo-mgw", "-c", "/etc/osmocom/osmo-mgw.cfg"]

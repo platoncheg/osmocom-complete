@@ -1,83 +1,26 @@
 FROM ubuntu:22.04
 
-LABEL maintainer="platoncheg"
-LABEL description="OsmoHLR - Home Location Register"
-
-# Avoid interactive prompts during build
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install dependencies
 RUN apt-get update && apt-get install -y \
     wget \
     gnupg2 \
     software-properties-common \
-    netcat \
-    sqlite3 \
+    apt-transport-https \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Add Osmocom repository
-RUN wget -O - https://downloads.osmocom.org/packages/osmocom%3Alatest/Release.key | apt-key add -
-RUN echo "deb https://downloads.osmocom.org/packages/osmocom:/latest/xUbuntu_22.04/ ./" > /etc/apt/sources.list.d/osmocom-latest.list
+# Add Osmocom repository with correct URL and GPG key
+RUN wget -O /etc/apt/trusted.gpg.d/osmocom.asc https://obs.osmocom.org/projects/osmocom/public_key
 
-# Update and install OsmoHLR
+RUN echo "deb [signed-by=/etc/apt/trusted.gpg.d/osmocom.asc] https://downloads.osmocom.org/packages/osmocom:/latest/xUbuntu_22.04/ ./" > /etc/apt/sources.list.d/osmocom.list
+
 RUN apt-get update && apt-get install -y \
     osmo-hlr \
     && rm -rf /var/lib/apt/lists/*
 
-# Create necessary directories
-RUN mkdir -p /opt/osmocom/etc /opt/osmocom/logs /opt/osmocom/data
+COPY /config/osmo-hlr.cfg /etc/osmocom/osmo-hlr.cfg
 
-# Copy default configuration
-COPY config/osmo-hlr.cfg /opt/osmocom/etc/osmo-hlr.cfg
+EXPOSE 4258
 
-# Create startup script with subscriber initialization
-RUN echo '#!/bin/bash\n\
-echo "Starting OsmoHLR..."\n\
-echo "Database: ${OSMO_HLR_DB_PATH:-/opt/osmocom/data/hlr.db}"\n\
-echo "Configuration: /opt/osmocom/etc/osmo-hlr.cfg"\n\
-\n\
-# Initialize database if it does not exist\n\
-if [ ! -f "${OSMO_HLR_DB_PATH:-/opt/osmocom/data/hlr.db}" ]; then\n\
-    echo "Initializing HLR database..."\n\
-    osmo-hlr-db-tool -l "${OSMO_HLR_DB_PATH:-/opt/osmocom/data/hlr.db}" create\n\
-    \n\
-    # Add test subscribers\n\
-    echo "Adding test subscribers..."\n\
-    osmo-hlr-db-tool -l "${OSMO_HLR_DB_PATH:-/opt/osmocom/data/hlr.db}" import-nitb-db /opt/osmocom/test_subscribers.sql || true\n\
-fi\n\
-\n\
-exec osmo-hlr -c /opt/osmocom/etc/osmo-hlr.cfg' > /opt/osmocom/start.sh
-
-# Create test subscribers SQL
-RUN echo 'INSERT INTO subscriber (imsi, msisdn, vlr_number, sgsn_number, sgsn_address, periodic_lu_timer, periodic_rau_tau_timer, nam_cs, nam_ps, lmsi, ms_purged_cs, ms_purged_ps) VALUES\n\
-("001010000000001", "1001", NULL, NULL, NULL, 0, 0, 1, 0, NULL, 0, 0),\n\
-("001010000000002", "1002", NULL, NULL, NULL, 0, 0, 1, 0, NULL, 0, 0),\n\
-("001010000000003", "1003", NULL, NULL, NULL, 0, 0, 1, 0, NULL, 0, 0);\n\
-\n\
-INSERT INTO auc_2g (subscriber_id, algo_id_2g, ki) VALUES\n\
-(1, 1, "000102030405060708090a0b0c0d0e0f"),\n\
-(2, 1, "101112131415161718191a1b1c1d1e1f"),\n\
-(3, 1, "202122232425262728292a2b2c2d2e2f");\n\
-\n\
-INSERT INTO auc_3g (subscriber_id, algo_id_3g, k, op, opc, sqn_ms, sqn_he, ind_bitlen) VALUES\n\
-(1, 5, "000102030405060708090a0b0c0d0e0f", "00112233445566778899aabbccddeeff", NULL, 0, 0, 5),\n\
-(2, 5, "101112131415161718191a1b1c1d1e1f", "00112233445566778899aabbccddeeff", NULL, 0, 0, 5),\n\
-(3, 5, "202122232425262728292a2b2c2d2e2f", "00112233445566778899aabbccddeeff", NULL, 0, 0, 5);' > /opt/osmocom/test_subscribers.sql
-
-RUN chmod +x /opt/osmocom/start.sh
-
-# Expose ports
-EXPOSE 4258 4222
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD nc -z localhost 4258 || exit 1
-
-# Switch to non-root user
-RUN useradd -r -s /bin/false osmocom
-RUN chown -R osmocom:osmocom /opt/osmocom
-USER osmocom
-
-WORKDIR /opt/osmocom
-
-CMD ["/opt/osmocom/start.sh"]
+CMD ["osmo-hlr", "-c", "/etc/osmocom/osmo-hlr.cfg"]
