@@ -19,8 +19,18 @@ RUN apt-get update && apt-get install -y \
     osmo-mgw \
     && rm -rf /var/lib/apt/lists/*
 
-COPY /config/osmo-mgw.cfg /etc/osmocom/osmo-mgw.cfg
+# Create directory for config and data
+RUN mkdir -p /data
 
-EXPOSE 2427
+# Copy configuration file
+COPY config/osmo-mgw.cfg /data/osmo-mgw.cfg
 
-CMD ["osmo-mgw", "-c", "/etc/osmocom/osmo-mgw.cfg"]
+EXPOSE 2427 2728
+
+WORKDIR /data
+
+# Create volume for persistent data
+VOLUME ["/data"]
+
+# Run osmo-mgw with config file
+CMD ["osmo-mgw", "-c", "/data/osmo-mgw.cfg"]

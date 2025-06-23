@@ -19,8 +19,18 @@ RUN apt-get update && apt-get install -y \
     osmo-bsc \
     && rm -rf /var/lib/apt/lists/*
 
-COPY /config/osmo-bsc.cfg /etc/osmocom/osmo-bsc.cfg
+# Create directory for config and data
+RUN mkdir -p /data
+
+# Copy configuration file
+COPY config/osmo-bsc.cfg /data/osmo-bsc.cfg
 
 EXPOSE 4242
 
-CMD ["osmo-bsc", "-c", "/etc/osmocom/osmo-bsc.cfg"]
+WORKDIR /data
+
+# Create volume for persistent data
+VOLUME ["/data"]
+
+# Run osmo-bsc with config file
+CMD ["osmo-bsc", "-c", "/data/osmo-bsc.cfg"]

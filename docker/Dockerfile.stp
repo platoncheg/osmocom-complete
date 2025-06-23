@@ -19,8 +19,18 @@ RUN apt-get update && apt-get install -y \
     osmo-stp \
     && rm -rf /var/lib/apt/lists/*
 
-COPY /config/osmo-stp.cfg /etc/osmocom/osmo-stp.cfg
+# Create directory for config and data
+RUN mkdir -p /data
+
+# Copy configuration file
+COPY config/osmo-stp.cfg /data/osmo-stp.cfg
 
 EXPOSE 4239 2905 14001
 
-CMD ["osmo-stp", "-c", "/etc/osmocom/osmo-stp.cfg"]
+WORKDIR /data
+
+# Create volume for persistent data
+VOLUME ["/data"]
+
+# Run osmo-stp with config file
+CMD ["osmo-stp", "-c", "/data/osmo-stp.cfg"]

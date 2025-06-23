@@ -39,45 +39,9 @@ print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
-# Function to fix repository URLs in existing Dockerfiles
-fix_dockerfiles() {
-    print_info "Fixing Dockerfile repository URLs..."
-    
-    # Find all Dockerfiles and fix the repository URLs
-    for dockerfile in Dockerfile Dockerfile.*; do
-        if [ -f "$dockerfile" ] && [ "$dockerfile" != "Dockerfile.backup" ]; then
-            print_info "Fixing $dockerfile..."
-            
-            # Create a backup
-            cp "$dockerfile" "$dockerfile.backup"
-            
-            # Use a more robust approach - create a completely new file
-            temp_file="${dockerfile}.new"
-            
-            # Process the file line by line
-            while IFS= read -r line; do
-                # Replace the problematic wget line
-                if echo "$line" | grep -q "wget.*osmocom.*Release\.key.*apt-key"; then
-                    echo "RUN wget -O /etc/apt/trusted.gpg.d/osmocom.asc https://obs.osmocom.org/projects/osmocom/public_key" >> "$temp_file"
-                # Replace repository lines
-                elif echo "$line" | grep -q "deb.*osmocom"; then
-                    echo 'RUN echo "deb [signed-by=/etc/apt/trusted.gpg.d/osmocom.asc] https://downloads.osmocom.org/packages/osmocom:/latest/xUbuntu_22.04/ ./" > /etc/apt/sources.list.d/osmocom.list' >> "$temp_file"
-                # Remove problematic pip lines in Alpine containers
-                elif echo "$line" | grep -q "pip.*install.*requests.*telnetlib3"; then
-                    echo "# Removed problematic pip install - using Alpine packages instead" >> "$temp_file"
-                    echo "RUN apk add --no-cache py3-requests" >> "$temp_file"
-                else
-                    echo "$line" >> "$temp_file"
-                fi
-            done < "$dockerfile"
-            
-            # Replace the original file
-            mv "$temp_file" "$dockerfile"
-            
-            print_success "Fixed $dockerfile"
-        fi
-    done
-}
+
+
+
 
 # Main deployment function
 main() {
@@ -119,9 +83,6 @@ main() {
         fi
     done
     print_success "Scripts ready"
-    
-    print_info "Fixing repository issues in Dockerfiles..."
-    fix_dockerfiles
     
     print_info "Cleaning up any existing deployment..."
     docker-compose down -v 2>/dev/null || true

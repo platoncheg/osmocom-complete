@@ -29,13 +29,12 @@ services:
       - "2905:2905"   # M3UA SCTP
       - "14001:14001" # SCCP
     volumes:
-      - ./config/osmo-stp.cfg:/opt/osmocom/etc/osmo-stp.cfg:ro
-      - osmocom-logs:/opt/osmocom/logs
+      - ./config/osmo-stp.cfg:/etc/osmocom/osmo-stp.cfg:ro
     deploy:
       resources:
         limits:
-          memory: 256M
-          cpus: '0.5'
+          memory: 512M
+          cpus: '1'
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "nc", "-z", "localhost", "4239"]
@@ -59,8 +58,7 @@ services:
       - "4258:4258"  # VTY interface
       - "4222:4222"  # GSUP
     volumes:
-      - ./config/osmo-hlr.cfg:/opt/osmocom/etc/osmo-hlr.cfg:ro
-      - hlr-data:/opt/osmocom/data
+      - ./config/osmo-hlr.cfg:/data/osmo-hlr.cfg:ro
       - osmocom-logs:/opt/osmocom/logs
     deploy:
       resources:

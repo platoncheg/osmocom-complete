@@ -19,8 +19,18 @@ RUN apt-get update && apt-get install -y \
     osmo-msc \
     && rm -rf /var/lib/apt/lists/*
 
-COPY /config/osmo-msc.cfg /etc/osmocom/osmo-msc.cfg
+# Create directory for config and data
+RUN mkdir -p /data
+
+# Copy configuration file
+COPY config/osmo-msc.cfg /data/osmo-msc.cfg
 
 EXPOSE 4254
 
-CMD ["osmo-msc", "-c", "/etc/osmocom/osmo-msc.cfg"]
+WORKDIR /data
+
+# Create volume for persistent data
+VOLUME ["/data"]
+
+# Run osmo-msc with config file
+CMD ["osmo-msc", "-c", "/data/osmo-msc.cfg"]

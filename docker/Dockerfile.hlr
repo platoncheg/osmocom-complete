@@ -19,8 +19,18 @@ RUN apt-get update && apt-get install -y \
     osmo-hlr \
     && rm -rf /var/lib/apt/lists/*
 
-COPY /config/osmo-hlr.cfg /etc/osmocom/osmo-hlr.cfg
+# Create directory for config and data
+RUN mkdir -p /data
+
+# Copy configuration file
+COPY config/osmo-hlr.cfg /data/osmo-hlr.cfg
 
 EXPOSE 4258
 
-CMD ["osmo-hlr", "-c", "/etc/osmocom/osmo-hlr.cfg"]
+WORKDIR /data
+
+# Create volume for persistent data
+VOLUME ["/data"]
+
+# Run osmo-hlr with config file
+CMD ["osmo-hlr", "-c", "/data/osmo-hlr.cfg"]
