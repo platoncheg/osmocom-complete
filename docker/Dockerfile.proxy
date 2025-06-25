@@ -4,7 +4,7 @@ WORKDIR /app
 
 COPY /scripts/vty_proxy.py /app/
 
-RUN pip install --break-system-packages flask requests
+RUN pip install --break-system-packages flask flask-cors requests
 
 EXPOSE 5000
 
