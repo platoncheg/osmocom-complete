@@ -8,16 +8,29 @@ RUN apt-get update && apt-get install -y \
     software-properties-common \
     apt-transport-https \
     ca-certificates \
+    sqlite3 \
+    netcat-openbsd \
     && rm -rf /var/lib/apt/lists/*
 
 # Add Osmocom repository with correct URL and GPG key
 RUN wget -O /etc/apt/trusted.gpg.d/osmocom.asc https://obs.osmocom.org/projects/osmocom/public_key
-
 RUN echo "deb [signed-by=/etc/apt/trusted.gpg.d/osmocom.asc] https://downloads.osmocom.org/packages/osmocom:/latest/xUbuntu_22.04/ ./" > /etc/apt/sources.list.d/osmocom.list
 
 RUN apt-get update && apt-get install -y \
     osmo-hlr \
     && rm -rf /var/lib/apt/lists/*
+
+# Set up directories
+RUN mkdir -p /opt/osmocom/src /opt/osmocom/logs /var/lib/osmocom /data
+RUN chown -R osmocom:osmocom /opt/osmocom /var/lib/osmocom /data
+
+# Copy entrypoint script
+COPY docker/hlr-entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+# Copy init script
+COPY init-databases.sh /usr/local/bin/init-databases.sh
+RUN chmod +x /usr/local/bin/init-databases.sh
 
 # Create directory for config and data
 RUN mkdir -p /data
@@ -25,12 +38,19 @@ RUN mkdir -p /data
 # Copy configuration file
 COPY config/osmo-hlr.cfg /data/osmo-hlr.cfg
 
-EXPOSE 4258
+# Set proper ownership
+RUN chown -R osmocom:osmocom /opt/osmocom /var/lib/osmocom /data
 
-WORKDIR /data
+# Expose VTY and GSUP ports
+EXPOSE 4258 4222
 
-# Create volume for persistent data
-VOLUME ["/data"]
+# Set environment variables
+ENV OSMO_HLR_DB_PATH=/var/lib/osmocom/hlr.db
+ENV OSMO_HLR_CONFIG_FILE=/data/osmo-hlr.cfg
 
-# Run osmo-hlr with config file
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD nc -z localhost 4258 || exit 1
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["osmo-hlr", "-c", "/data/osmo-hlr.cfg"]
