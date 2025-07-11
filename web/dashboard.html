@@ -297,6 +297,7 @@
         // Global variables
         let isConnected = false;
         let updateInterval = null;
+        const PROXY_URL = 'http://localhost:5000';
 
         // Initialize dashboard
         document.addEventListener('DOMContentLoaded', function() {
@@ -323,28 +324,27 @@
         }
 
         function checkVTYConnection() {
-            // Connect to the VTY proxy server
-            fetch('/api/vty/status')
+            // FIXED: Use correct endpoint path
+            fetch(`${PROXY_URL}/health`)
                 .then(response => {
                     if (response.ok) {
                         return response.json();
-                    } else {
-                        // Try the proxy server directly
-                        return fetch('http://localhost:5000/api/vty/status')
-                            .then(res => res.json());
                     }
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
                 })
                 .then(data => {
-                    if (data.connected) {
-                        updateConnectionStatus('connected', `Connected to SS7 stack via VTY (${data.host}:${data.port})`);
+                    console.log('Health check response:', data);
+                    if (data.status === 'healthy') {
+                        updateConnectionStatus('connected', `Connected to VTY proxy (${data.services.stp.name})`);
                         isConnected = true;
                         refreshAllData();
                     } else {
-                        updateConnectionStatus('disconnected', `VTY connection failed: ${data.error}`);
+                        updateConnectionStatus('disconnected', `VTY proxy unhealthy: ${data.services.stp.error || 'Unknown error'}`);
                         isConnected = false;
                     }
                 })
                 .catch(error => {
+                    console.error('Connection error:', error);
                     updateConnectionStatus('disconnected', `Proxy server not available: ${error.message}`);
                     isConnected = false;
                     showProxyInstructions();
@@ -372,10 +372,9 @@ The VTY proxy should be automatically available at:
    http://localhost:5000
 
 <span style="color: #68d391;">✅ Available Endpoints:</span>
-- /api/vty/status - Check connection
-- /api/vty/users - Get CS7 users
-- /api/vty/asp - Get ASP status
-- /api/vty/as - Get AS status
+- /health - Check connection status
+- /api/command - Send VTY commands
+- /api/status - Get system status
 
 <span style="color: #63b3ed;">🔄 Auto-retry in 10 seconds...</span>
             `;
@@ -410,7 +409,7 @@ The VTY proxy should be automatically available at:
             systemStatus.classList.add('updating');
 
             if (isConnected) {
-                sendCommand('show cs7 instance 0 users', (result) => {
+                sendCommand('show cs7 instance 0 users', 'stp', (result) => {
                     systemStatus.innerHTML = parseSystemStatus(result);
                     systemStatus.classList.remove('updating');
                 });
@@ -440,7 +439,7 @@ The VTY proxy should be automatically available at:
             cs7Status.classList.add('updating');
 
             if (isConnected) {
-                sendCommand('show cs7 instance 0 users', (result) => {
+                sendCommand('show cs7 instance 0 users', 'stp', (result) => {
                     cs7Status.innerHTML = parseCS7Users(result);
                     cs7Status.classList.remove('updating');
                 });
@@ -470,7 +469,7 @@ The VTY proxy should be automatically available at:
             aspStatus.classList.add('updating');
 
             if (isConnected) {
-                sendCommand('show cs7 instance 0 asp', (result) => {
+                sendCommand('show cs7 instance 0 asp', 'stp', (result) => {
                     aspStatus.innerHTML = parseASPStatus(result);
                     aspStatus.classList.remove('updating');
                 });
@@ -499,7 +498,7 @@ The VTY proxy should be automatically available at:
             asStatus.classList.add('updating');
 
             if (isConnected) {
-                sendCommand('show cs7 instance 0 as all', (result) => {
+                sendCommand('show cs7 instance 0 as all', 'stp', (result) => {
                     asStatus.innerHTML = parseASStatus(result);
                     asStatus.classList.remove('updating');
                 });
@@ -519,24 +518,32 @@ The VTY proxy should be automatically available at:
             }
         }
 
-        function sendCommand(command, callback) {
+        function sendCommand(command, service, callback) {
             if (isConnected) {
-                fetch('/api/vty/command', {
+                // FIXED: Use correct endpoint path
+                fetch(`${PROXY_URL}/api/command`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ command: command })
+                    body: JSON.stringify({
+                        command: command,
+                        service: service || 'stp'
+                    })
                 })
                 .then(response => response.json())
                 .then(data => {
-                    if (data.success) {
-                        callback(data.output);
+                    console.log('Command response:', data);
+                    if (data.result && data.result.success) {
+                        callback(data.result.output);
                     } else {
-                        callback(`Error: ${data.error}`);
-                        isConnected = false;
-                        updateConnectionStatus('disconnected', 'VTY connection lost');
+                        callback(`Error: ${data.result.error || data.error || 'Unknown error'}`);
+                        if (data.error && data.error.includes('connect')) {
+                            isConnected = false;
+                            updateConnectionStatus('disconnected', 'VTY connection lost');
+                        }
                     }
                 })
                 .catch(error => {
+                    console.error('Command error:', error);
                     callback(`Connection error: ${error.message}`);
                     isConnected = false;
                     updateConnectionStatus('disconnected', 'Proxy connection lost');
@@ -554,7 +561,7 @@ The VTY proxy should be automatically available at:
             output.innerHTML += `\n<span style="color: #68d391;">${new Date().toLocaleTimeString()} > ${command}</span>\n`;
 
             if (isConnected) {
-                sendCommand(command, (result) => {
+                sendCommand(command, 'stp', (result) => {
                     output.innerHTML += result + '\n';
                     output.scrollTop = output.scrollHeight;
                 });

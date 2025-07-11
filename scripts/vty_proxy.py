@@ -280,7 +280,7 @@ def get_status():
 
 @app.route('/api/sms/send', methods=['POST'])
 def send_sms():
-    """Send SMS via MSC integrated SMSC"""
+    """Send SMS via MSC - FIXED VERSION"""
     try:
         data = request.get_json()
         if not data:
@@ -290,14 +290,54 @@ def send_sms():
         to_number = data.get('to', '1002')
         message = data.get('message', 'Test SMS')
 
+        print(f"SMS Request: {from_number} -> {to_number}: {message}")
+
+        # First, check if subscriber exists in HLR
+        hlr_vty = get_vty_connection('hlr')
+        if hlr_vty:
+            subscriber_check = hlr_vty.send_command(f"subscriber show msisdn {to_number}")
+            print(f"HLR subscriber check: {subscriber_check}")
+            
+            if subscriber_check.get('success') and 'No subscriber' in subscriber_check.get('output', ''):
+                # Try to create subscriber if not exists
+                print(f"Creating subscriber {to_number}")
+                imsi = f"001010{to_number.zfill(9)}"  # Generate IMSI
+                create_result = hlr_vty.send_command(f"subscriber create imsi {imsi}")
+                if create_result.get('success'):
+                    # Set MSISDN
+                    hlr_vty.send_command(f"subscriber imsi {imsi} update msisdn {to_number}")
+                    print(f"Created subscriber {to_number} with IMSI {imsi}")
+
         # Get MSC VTY connection
-        vty = get_vty_connection('msc')
-        if not vty:
+        msc_vty = get_vty_connection('msc')
+        if not msc_vty:
             return jsonify({'error': 'Cannot connect to MSC'}), 500
 
-        # Send SMS command (this is a simplified example)
-        command = f"subscriber msisdn {to_number} sms sender msisdn {from_number} send {message}"
-        result = vty.send_command(command)
+        # FIXED: Use correct OsmoMSC SMS command format
+        # Try different SMS command formats for OsmoMSC
+        sms_commands = [
+            f"sms send {to_number} {from_number} {message}",
+            f"subscriber msisdn {to_number} sms sender msisdn {from_number} send {message}",
+            f"subscriber show msisdn {to_number}"  # Test command to see if subscriber exists
+        ]
+
+        result = None
+        for cmd in sms_commands:
+            print(f"Trying SMS command: {cmd}")
+            result = msc_vty.send_command(cmd)
+            print(f"SMS command result: {result}")
+            
+            if result.get('success'):
+                # Check if this was the actual SMS send command
+                if 'sms send' in cmd.lower() or 'send' in cmd:
+                    break
+                # If it's a subscriber check and subscriber exists, try to send
+                if 'subscriber show' in cmd and 'No subscriber' not in result.get('output', ''):
+                    # Subscriber exists, now try to send SMS
+                    actual_send = msc_vty.send_command(f"sms send {to_number} {from_number} {message}")
+                    if actual_send.get('success'):
+                        result = actual_send
+                        break
 
         return jsonify({
             'from': from_number,
@@ -308,6 +348,7 @@ def send_sms():
         })
 
     except Exception as e:
+        print(f"SMS Error: {e}")
         return jsonify({'error': str(e)}), 500
 
 
@@ -323,6 +364,45 @@ def get_subscribers():
 
         return jsonify({
             'subscribers': result,
+            'timestamp': time.time()
+        })
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/subscribers/create', methods=['POST'])
+def create_subscriber():
+    """Create subscriber in HLR"""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'No JSON data provided'}), 400
+
+        msisdn = data.get('msisdn', '')
+        imsi = data.get('imsi', '')
+
+        if not msisdn:
+            return jsonify({'error': 'MSISDN is required'}), 400
+
+        # Generate IMSI if not provided
+        if not imsi:
+            imsi = f"001010{msisdn.zfill(9)}"
+
+        hlr_vty = get_vty_connection('hlr')
+        if not hlr_vty:
+            return jsonify({'error': 'Cannot connect to HLR'}), 500
+
+        # Create subscriber
+        create_result = hlr_vty.send_command(f"subscriber create imsi {imsi}")
+        if create_result.get('success'):
+            # Set MSISDN
+            msisdn_result = hlr_vty.send_command(f"subscriber imsi {imsi} update msisdn {msisdn}")
+            
+        return jsonify({
+            'imsi': imsi,
+            'msisdn': msisdn,
+            'create_result': create_result,
             'timestamp': time.time()
         })
 
@@ -370,11 +450,9 @@ if __name__ == '__main__':
     # Clean up connections on exit
     import atexit
 
-
     def cleanup():
         for vty in vty_connections.values():
             vty.disconnect()
-
 
     atexit.register(cleanup)
 
