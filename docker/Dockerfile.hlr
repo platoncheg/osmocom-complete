@@ -4,6 +4,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y \
     wget \
+    telnet \
     gnupg2 \
     software-properties-common \
     apt-transport-https \
@@ -24,13 +25,6 @@ RUN apt-get update && apt-get install -y \
 RUN mkdir -p /opt/osmocom/src /opt/osmocom/logs /var/lib/osmocom /data
 RUN chown -R osmocom:osmocom /opt/osmocom /var/lib/osmocom /data
 
-# Copy entrypoint script
-COPY docker/hlr-entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
-
-# Copy init script
-COPY init-databases.sh /usr/local/bin/init-databases.sh
-RUN chmod +x /usr/local/bin/init-databases.sh
 
 # Create directory for config and data
 RUN mkdir -p /data
@@ -52,5 +46,5 @@ ENV OSMO_HLR_CONFIG_FILE=/data/osmo-hlr.cfg
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
     CMD nc -z localhost 4258 || exit 1
 
-ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+
 CMD ["osmo-hlr", "-c", "/data/osmo-hlr.cfg"]

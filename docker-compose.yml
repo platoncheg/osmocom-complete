@@ -57,9 +57,8 @@ services:
       - "4222:4222"  # GSUP
     volumes:
       - ./config/osmo-hlr.cfg:/data/osmo-hlr.cfg:ro
-      - ./data:/var/lib/osmocom  # Persist HLR database to local ./data directory
+      - ./data:/var/lib/osmocom
       - osmocom-logs:/opt/osmocom/logs
-      - ./init-databases.sh:/docker-entrypoint-initdb.d/init-databases.sh:ro
     deploy:
       resources:
         limits:

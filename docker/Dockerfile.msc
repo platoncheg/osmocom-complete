@@ -4,6 +4,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y \
     wget \
+    telnet \
     gnupg2 \
     software-properties-common \
     apt-transport-https \
@@ -31,6 +32,10 @@ WORKDIR /data
 
 # Create volume for persistent data
 VOLUME ["/data"]
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD nc -z localhost 4254 || exit 1
 
 # Run osmo-msc with config file
 CMD ["osmo-msc", "-c", "/data/osmo-msc.cfg"]
