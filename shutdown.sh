@@ -105,10 +105,30 @@ stop_web_services() {
     log_success "Web services stopped"
 }
 
+stop_radio_services() {
+    log_info "Stopping radio access network services..."
+    
+    # Stop mobile emulator first (depends on BTS)
+    if docker-compose ps osmocom-bb | grep -q "Up"; then
+        log_info "Stopping OsmocomBB (Mobile Station Emulator)..."
+        docker-compose stop osmocom-bb
+        wait_for_service_stop osmocom-bb 15
+    fi
+    
+    # Then stop BTS (depends on BSC)
+    if docker-compose ps osmo-bts | grep -q "Up"; then
+        log_info "Stopping BTS (Base Transceiver Station)..."
+        docker-compose stop osmo-bts
+        wait_for_service_stop osmo-bts 20
+    fi
+    
+    log_success "Radio access network services stopped"
+}
+
 stop_telecom_services() {
     log_info "Stopping telecom services..."
     
-    # Stop BSC first (depends on MSC)
+    # Stop BSC (depends on MSC)
     if docker-compose ps osmo-bsc | grep -q "Up"; then
         log_info "Stopping BSC (Base Station Controller)..."
         docker-compose stop osmo-bsc
@@ -266,8 +286,9 @@ main() {
         fi
     fi
     
-    # Graceful shutdown in reverse dependency order
+    # Graceful shutdown in proper reverse dependency order
     stop_web_services
+    stop_radio_services
     stop_telecom_services
     stop_core_services
     
@@ -290,6 +311,7 @@ case "${1:-}" in
         echo "  --yes            Skip confirmation prompt"
         echo "  --clean          Also remove volumes and networks"
         echo "  --web-only       Stop only web services (dashboard, simulator)"
+        echo "  --radio-only     Stop only radio services (BTS, mobile emulator)"
         echo "  --core-only      Stop only core services (keep web running)"
         echo ""
         echo "Examples:"
@@ -297,6 +319,7 @@ case "${1:-}" in
         echo "  $0 --yes         # Graceful shutdown without confirmation"
         echo "  $0 --force       # Immediate force shutdown"
         echo "  $0 --clean       # Shutdown and clean up volumes"
+        echo "  $0 --radio-only  # Stop mobile and BTS only"
         echo ""
         exit 0
         ;;
@@ -329,18 +352,29 @@ case "${1:-}" in
         stop_web_services
         echo ""
         echo "Web services stopped. Core network services are still running."
-        echo "Access via VTY: telnet localhost 4239/4254/4242/4258/2427"
+        echo "Access via VTY: telnet localhost 4239/4254/4242/4241/4247/4258/2427"
+        ;;
+    --radio-only)
+        print_header
+        log_info "Stopping radio access network services only..."
+        stop_radio_services
+        echo ""
+        echo "Radio services stopped. Core network and web services are still running."
+        echo "Mobile emulator and BTS are now offline."
+        echo ""
+        echo "To restart radio services:"
+        echo "  docker-compose up -d osmo-bts osmocom-bb"
         ;;
     --core-only)
         print_header
         log_info "Stopping core services only..."
         
-        read -p "This will stop core services but may leave web services in error state. Continue? (y/N): " -n 1 -r
+        read -p "This will stop core services but may leave web and radio services in error state. Continue? (y/N): " -n 1 -r
         echo ""
         if [[ $REPLY =~ ^[Yy]$ ]]; then
             stop_core_services
             echo ""
-            echo "Core services stopped. Web services may show errors."
+            echo "Core services stopped. Web and radio services may show errors."
         else
             log_info "Operation cancelled"
         fi

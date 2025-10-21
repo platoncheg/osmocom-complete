@@ -113,8 +113,6 @@ show_service_status() {
         "osmo-mgw:2427:OsmoMGW:Media Gateway"
         "osmo-msc:4254:OsmoMSC:Mobile Switching Center + SMSC"
         "osmo-bsc:4242:OsmoBSC:Base Station Controller"
-        "osmo-bts:4241:OsmoBTS:Base Transceiver Station"
-        "osmocom-bb:4247:OsmocomBB:Mobile Station Emulator"
         "vty-proxy:5000:VTY Proxy:HTTP-VTY Bridge"
         "web-dashboard:8888:Web Dashboard:Monitoring Interface"
         "sms-simulator:9999:SMS Simulator:Testing Interface"
@@ -220,17 +218,13 @@ show_network_status() {
         "4239:OsmoSTP VTY"
         "4254:OsmoMSC VTY"
         "4242:OsmoBSC VTY"
-        "4241:OsmoBTS VTY"
-        "4247:OsmocomBB VTY"
         "4258:OsmoHLR VTY"
         "2427:OsmoMGW VTY"
         "5000:VTY Proxy API"
         "8888:Web Dashboard"
         "9999:SMS Simulator"
-        "2775:SMPP"
         "2905:M3UA/SCTP"
         "2728:MGCP"
-        "6700:TRX Interface"
     )
     
     for port_info in "${external_ports[@]}"; do
@@ -303,8 +297,6 @@ show_vty_connectivity() {
         "localhost:4239:OsmoSTP"
         "localhost:4254:OsmoMSC"
         "localhost:4242:OsmoBSC"
-        "localhost:4241:OsmoBTS"
-        "localhost:4247:OsmocomBB"
         "localhost:4258:OsmoHLR"
         "localhost:2427:OsmoMGW"
     )
@@ -365,97 +357,6 @@ show_api_status() {
     done
 }
 
-show_mobile_status() {
-    print_section "Mobile Emulator Status"
-    
-    # Check OsmocomBB status
-    if ! docker-compose ps osmocom-bb | grep -q "Up"; then
-        echo -e "${RED}✗${NC} OsmocomBB container is not running"
-        return
-    fi
-    
-    echo -e "${GREEN}✓${NC} OsmocomBB container is running"
-    
-    # Test VTY connectivity
-    echo -n "Testing OsmocomBB VTY (localhost:4247)... "
-    if timeout 5 bash -c "echo 'quit' | nc localhost 4247" >/dev/null 2>&1; then
-        echo -e "${GREEN}OK${NC}"
-        
-        # Try to get mobile status
-        echo ""
-        echo "Mobile Status:"
-        local mobile_status
-        mobile_status=$(timeout 10 bash -c "echo -e 'show ms\nquit' | nc localhost 4247" 2>/dev/null | grep -v "quit" | tail -n +2 | head -10 || echo "")
-        
-        if [ -n "$mobile_status" ]; then
-            echo "$mobile_status" | sed 's/^/  /'
-        else
-            echo "  Could not retrieve mobile status"
-        fi
-    else
-        echo -e "${RED}FAILED${NC}"
-    fi
-    
-    echo ""
-    echo "Mobile Testing Commands:"
-    echo "  Connect to mobile: telnet localhost 4247"
-    echo "  Force registration: > enable; location-update"
-    echo "  Check status: > show ms"
-    echo "  View SMS: > show sms"
-}
-
-show_subscriber_status() {
-    print_section "Subscriber Status"
-    
-    # Check MSC VTY connectivity first
-    if ! timeout 5 bash -c "echo 'quit' | nc localhost 4254" >/dev/null 2>&1; then
-        echo -e "${RED}✗${NC} Cannot check subscriber status - MSC VTY not accessible"
-        return
-    fi
-    
-    echo "Checking registered subscribers..."
-    
-    # Get subscriber list from MSC
-    local subscribers
-    subscribers=$(timeout 10 bash -c "echo -e 'show subscribers\nquit' | nc localhost 4254" 2>/dev/null | grep -v "quit" | tail -n +2 | head -20 || echo "")
-    
-    if [ -n "$subscribers" ]; then
-        echo "Registered Subscribers in MSC:"
-        echo "$subscribers" | sed 's/^/  /'
-        
-        # Count subscribers
-        local sub_count
-        sub_count=$(echo "$subscribers" | grep -c "IMSI" 2>/dev/null || echo "0")
-        echo ""
-        echo "Total registered subscribers: $sub_count"
-    else
-        echo -e "${YELLOW}⚠${NC} No subscribers currently registered with MSC"
-        echo ""
-        echo "To register a subscriber:"
-        echo "  1. Connect to mobile: telnet localhost 4247"
-        echo "  2. Enable and register: > enable; location-update"
-        echo "  3. Check MSC: telnet localhost 4254; > show subscribers"
-    fi
-    
-    echo ""
-    echo "HLR Subscriber Database:"
-    
-    # Check HLR subscribers
-    local hlr_subscribers
-    hlr_subscribers=$(timeout 10 bash -c "echo -e 'show subscribers all\nquit' | nc localhost 4258" 2>/dev/null | grep -v "quit" | tail -n +2 | head -20 || echo "")
-    
-    if [ -n "$hlr_subscribers" ]; then
-        echo "$hlr_subscribers" | sed 's/^/  /'
-    else
-        echo "  No subscribers in HLR database"
-        echo ""
-        echo "To add subscribers to HLR:"
-        echo "  telnet localhost 4258"
-        echo "  > subscriber imsi 001010000000001 create"
-        echo "  > subscriber imsi 001010000000001 update msisdn 1234567890"
-    fi
-}
-
 show_sms_status() {
     print_section "SMS System Status"
     
@@ -467,52 +368,47 @@ show_sms_status() {
     
     echo "Checking SMS queue status via MSC..."
     
-    # Try to get SMS queue status directly via VTY
-    local sms_queue
-    sms_queue=$(timeout 10 bash -c "echo -e 'show sms-queue\nquit' | nc localhost 4254" 2>/dev/null | grep -v "quit" | tail -n +2 | head -10 || echo "")
+    # Try to get SMS queue status
+    local queue_response
+    queue_response=$(curl -s --connect-timeout 10 -X POST http://localhost:5000/api/command \
+        -H "Content-Type: application/json" \
+        -d '{"service": "msc", "command": "show sms queue"}' 2>/dev/null || echo "")
     
-    if [ -n "$sms_queue" ]; then
+    if [ -n "$queue_response" ]; then
         echo "SMS Queue Status:"
-        echo "$sms_queue" | sed 's/^/  /'
+        echo "$queue_response" | python3 -c "
+import json, sys
+try:
+    data = json.load(sys.stdin)
+    if data.get('result', {}).get('success'):
+        print('  ✓ SMS queue accessible')
+        output = data['result'].get('output', '')
+        if output:
+            print('  Queue details:')
+            for line in output.split('\n')[:10]:  # First 10 lines
+                if line.strip():
+                    print(f'    {line}')
+    else:
+        print('  ✗ SMS queue check failed')
+        print(f'    Error: {data.get(\"result\", {}).get(\"error\", \"Unknown error\")}')
+except:
+    print('  ✗ Could not parse SMS queue response')
+" 2>/dev/null || echo "  ✗ Could not check SMS queue"
     else
-        echo -e "${YELLOW}⚠${NC} SMS queue appears empty or inaccessible"
+        echo -e "${RED}✗${NC} Could not retrieve SMS queue status"
     fi
     
     echo ""
-    echo "SMPP Status (port 2775):"
-    if nc -z localhost 2775 2>/dev/null; then
-        echo -e "  ${GREEN}✓${NC} SMPP port is accessible"
-        
-        # Check for SMPP connections
-        local smpp_status
-        smpp_status=$(timeout 10 bash -c "echo -e 'show smpp esme\nquit' | nc localhost 4254" 2>/dev/null | grep -v "quit" | tail -n +2 | head -10 || echo "")
-        
-        if [ -n "$smpp_status" ]; then
-            echo "  SMPP connections:"
-            echo "$smpp_status" | sed 's/^/    /'
-        else
-            echo "  No SMPP connections active"
-        fi
-    else
-        echo -e "  ${RED}✗${NC} SMPP port not accessible"
-    fi
-    
-    echo ""
-    echo "SMS Testing Commands:"
-    echo "  Direct SMS via MSC:"
-    echo "    telnet localhost 4254"
-    echo "    > subscriber msisdn 1234567890 sms sender msisdn 987654321 send \"Test\""
-    echo ""
-    echo "  SMS via API:"
-    echo "    curl -X POST http://localhost:5000/api/sms/send \\"
-    echo "         -H 'Content-Type: application/json' \\"
-    echo "         -d '{\"from\": \"1001\", \"to\": \"1002\", \"message\": \"Test\"}'"
+    echo "SMS Testing:"
+    echo "  Send test SMS: curl -X POST http://localhost:5000/api/sms/send \\"
+    echo "                      -H 'Content-Type: application/json' \\"
+    echo "                      -d '{\"from\": \"1001\", \"to\": \"1002\", \"message\": \"Test\"}'"
 }
 
 show_logs_summary() {
     print_section "Recent Logs Summary"
     
-    local services=("osmo-stp" "osmo-hlr" "osmo-mgw" "osmo-msc" "osmo-bsc" "osmo-bts" "osmocom-bb" "vty-proxy")
+    local services=("osmo-stp" "osmo-hlr" "osmo-mgw" "osmo-msc" "osmo-bsc" "vty-proxy")
     
     for service in "${services[@]}"; do
         if docker-compose ps $service | grep -q "Up"; then
@@ -536,8 +432,6 @@ show_quick_actions() {
     echo "Monitoring:"
     echo "  ./status.sh --watch   - Continuous monitoring"
     echo "  ./status.sh --health  - Health check only"
-    echo "  ./status.sh --mobile  - Mobile emulator status"
-    echo "  ./status.sh --subs    - Subscriber status"
     echo "  ./status.sh --logs    - Recent logs only"
     echo ""
     echo "Access Points:"
@@ -549,8 +443,6 @@ show_quick_actions() {
     echo "  telnet localhost 4239 # OsmoSTP"
     echo "  telnet localhost 4254 # OsmoMSC"
     echo "  telnet localhost 4242 # OsmoBSC"
-    echo "  telnet localhost 4241 # OsmoBTS"
-    echo "  telnet localhost 4247 # OsmocomBB"
     echo "  telnet localhost 4258 # OsmoHLR"
     echo "  telnet localhost 2427 # OsmoMGW"
 }
@@ -563,7 +455,6 @@ watch_mode() {
         clear
         print_header
         show_service_status
-        show_subscriber_status
         
         echo ""
         echo -e "${CYAN}Last updated: $(date)${NC}"
@@ -582,8 +473,6 @@ main() {
     show_resource_usage
     show_vty_connectivity
     show_api_status
-    show_mobile_status
-    show_subscriber_status
     show_sms_status
     show_logs_summary
     show_quick_actions
@@ -604,8 +493,6 @@ case "${1:-}" in
         echo "  --resources      Show only resource usage"
         echo "  --vty            Test VTY connectivity only"
         echo "  --api            Test API endpoints only"
-        echo "  --mobile         Show mobile emulator status only"
-        echo "  --subs           Show subscriber status only"
         echo "  --sms            Show SMS system status only"
         echo "  --logs           Show recent logs only"
         echo "  --json           Output status in JSON format"
@@ -614,8 +501,6 @@ case "${1:-}" in
         echo "  $0               # Full status report"
         echo "  $0 --watch       # Continuous monitoring"
         echo "  $0 --health      # Quick health check"
-        echo "  $0 --mobile      # Mobile emulator status"
-        echo "  $0 --subs        # Subscriber registration status"
         echo "  $0 --json        # JSON output for automation"
         echo ""
         exit 0
@@ -644,14 +529,6 @@ case "${1:-}" in
         print_header
         show_api_status
         ;;
-    --mobile)
-        print_header
-        show_mobile_status
-        ;;
-    --subs)
-        print_header
-        show_subscriber_status
-        ;;
     --sms)
         print_header
         show_sms_status
@@ -666,7 +543,7 @@ case "${1:-}" in
         echo "  \"timestamp\": \"$(date -Iseconds)\","
         echo "  \"services\": {"
         
-        local services=("osmo-stp" "osmo-hlr" "osmo-mgw" "osmo-msc" "osmo-bsc" "osmo-bts" "osmocom-bb" "vty-proxy" "web-dashboard" "sms-simulator")
+        local services=("osmo-stp" "osmo-hlr" "osmo-mgw" "osmo-msc" "osmo-bsc" "vty-proxy" "web-dashboard" "sms-simulator")
         local first=true
         
         for service in "${services[@]}"; do

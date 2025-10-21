@@ -72,6 +72,8 @@ check_images() {
         "${PROJECT_NAME}_osmo-mgw"
         "${PROJECT_NAME}_osmo-msc"
         "${PROJECT_NAME}_osmo-bsc"
+        "${PROJECT_NAME}_osmo-bts"
+        "${PROJECT_NAME}_osmocom-bb"
         "${PROJECT_NAME}_vty-proxy"
         "${PROJECT_NAME}_web-dashboard"
         "${PROJECT_NAME}_sms-simulator"
@@ -155,6 +157,16 @@ start_telecom_services() {
     docker-compose up -d osmo-bsc
     wait_for_service "OsmoBSC" 4242
     
+    # BTS depends on BSC
+    log_info "Starting BTS (Base Transceiver Station)..."
+    docker-compose up -d osmo-bts
+    wait_for_service "OsmoBTS" 4241
+    
+    # Mobile emulator depends on BTS
+    log_info "Starting OsmocomBB (Mobile Station Emulator)..."
+    docker-compose up -d osmocom-bb
+    wait_for_service "OsmocomBB" 4247
+    
     log_success "Telecom services started successfully"
 }
 
@@ -187,6 +199,8 @@ verify_health() {
         "osmo-mgw:2427:OsmoMGW"
         "osmo-msc:4254:OsmoMSC"
         "osmo-bsc:4242:OsmoBSC"
+        "osmo-bts:4241:OsmoBTS"
+        "osmocom-bb:4247:OsmocomBB"
         "vty-proxy:5000:VTY Proxy"
         "web-dashboard:8888:Web Dashboard"
         "sms-simulator:9999:SMS Simulator"
@@ -239,10 +253,21 @@ show_access_info() {
     echo "OsmoSTP:  telnet localhost 4239"
     echo "OsmoMSC:  telnet localhost 4254"
     echo "OsmoBSC:  telnet localhost 4242"
+    echo "OsmoBTS:  telnet localhost 4241"
+    echo "OsmoBB:   telnet localhost 4247"
     echo "OsmoHLR:  telnet localhost 4258"
     echo "OsmoMGW:  telnet localhost 2427"
     echo ""
     echo "=== Quick Test ==="
+    echo ""
+    echo "# Test mobile registration:"
+    echo "telnet localhost 4247  # Connect to mobile"
+    echo "> enable"
+    echo "> location-update"
+    echo ""
+    echo "# Check subscriber registration:"
+    echo "telnet localhost 4254  # Connect to MSC"
+    echo "> show subscribers"
     echo ""
     echo "# Send test SMS:"
     echo "curl -X POST http://localhost:5000/api/sms/send \\"
@@ -307,15 +332,19 @@ case "${1:-}" in
         echo "Usage: $0 [OPTIONS]"
         echo ""
         echo "Options:"
-        echo "  --help, -h     Show this help message"
-        echo "  --core-only    Start only core services (STP, HLR, MGW)"
-        echo "  --no-web       Start without web interfaces"
-        echo "  --force        Force startup even if some services fail"
+        echo "  --help, -h       Show this help message"
+        echo "  --core-only      Start only core services (STP, HLR, MGW)"
+        echo "  --ran-only       Start radio access network (BSC, BTS, OsmocomBB)"
+        echo "  --no-web         Start without web interfaces"
+        echo "  --no-mobile      Start without mobile emulator (OsmocomBB)"
+        echo "  --force          Force startup even if some services fail"
         echo ""
         echo "Examples:"
-        echo "  $0              # Start all services"
-        echo "  $0 --core-only  # Start only core network services"
-        echo "  $0 --no-web     # Start without web dashboard and SMS simulator"
+        echo "  $0                # Start all services"
+        echo "  $0 --core-only    # Start only core network services"
+        echo "  $0 --ran-only     # Start only radio access network"
+        echo "  $0 --no-web       # Start without web dashboard and SMS simulator"
+        echo "  $0 --no-mobile    # Start without mobile emulator"
         echo ""
         exit 0
         ;;
@@ -327,6 +356,60 @@ case "${1:-}" in
         verify_health
         echo ""
         echo "Core services started. Use '$0' to start remaining services."
+        ;;
+    --ran-only)
+        print_header
+        check_docker
+        check_images
+        
+        log_info "Starting Radio Access Network components only..."
+        
+        # Start BSC first
+        log_info "Starting BSC (Base Station Controller)..."
+        docker-compose up -d osmo-bsc
+        wait_for_service "OsmoBSC" 4242
+        
+        # Then BTS
+        log_info "Starting BTS (Base Transceiver Station)..."
+        docker-compose up -d osmo-bts
+        wait_for_service "OsmoBTS" 4241
+        
+        # Finally mobile emulator
+        log_info "Starting OsmocomBB (Mobile Station Emulator)..."
+        docker-compose up -d osmocom-bb
+        wait_for_service "OsmocomBB" 4247
+        
+        verify_health
+        echo ""
+        echo "Radio Access Network started. Core services must be running separately."
+        echo "Mobile VTY: telnet localhost 4247"
+        ;;
+    --no-mobile)
+        print_header
+        check_docker
+        check_images
+        start_core_services
+        
+        # Start telecom services but skip mobile
+        log_info "Starting telecom services (without mobile emulator)..."
+        
+        log_info "Starting MSC (Mobile Switching Center with integrated SMSC)..."
+        docker-compose up -d osmo-msc
+        wait_for_service "OsmoMSC" 4254
+        
+        log_info "Starting BSC (Base Station Controller)..."
+        docker-compose up -d osmo-bsc
+        wait_for_service "OsmoBSC" 4242
+        
+        log_info "Starting BTS (Base Transceiver Station)..."
+        docker-compose up -d osmo-bts
+        wait_for_service "OsmoBTS" 4241
+        
+        start_management_services
+        verify_health
+        echo ""
+        echo "Services started without mobile emulator."
+        echo "To start mobile later: docker-compose up -d osmocom-bb"
         ;;
     --no-web)
         print_header

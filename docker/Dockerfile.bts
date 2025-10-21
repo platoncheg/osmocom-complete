@@ -1,0 +1,37 @@
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y \
+    wget \
+    gnupg2 \
+    software-properties-common \
+    apt-transport-https \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Add Osmocom repository with correct URL and GPG key
+RUN wget -O /etc/apt/trusted.gpg.d/osmocom.asc https://obs.osmocom.org/projects/osmocom/public_key
+RUN echo "deb [signed-by=/etc/apt/trusted.gpg.d/osmocom.asc] https://downloads.osmocom.org/packages/osmocom:/latest/xUbuntu_22.04/ ./" > /etc/apt/sources.list.d/osmocom.list
+
+RUN apt-get update && apt-get install -y \
+    osmo-bts-virtual \
+    netcat-openbsd \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create directory for config and data
+RUN mkdir -p /data
+
+# Copy configuration file
+COPY config/osmo-bts.cfg /data/osmo-bts.cfg
+
+
+EXPOSE 4241 6700-6710/udp
+
+WORKDIR /data
+
+# Create volume for persistent data
+VOLUME ["/data"]
+
+# Run osmo-bts-virtual with config file
+CMD ["osmo-bts-virtual", "-c", "/data/osmo-bts.cfg"]

@@ -52,6 +52,8 @@ show_help() {
     echo "  stp, osmo-stp          OsmoSTP (SS7 Signaling Transfer Point)"
     echo "  msc, osmo-msc          OsmoMSC (Mobile Switching Center + SMSC)"
     echo "  bsc, osmo-bsc          OsmoBSC (Base Station Controller)"
+    echo "  bts, osmo-bts          OsmoBTS (Base Transceiver Station)"
+    echo "  bb, osmocom-bb, mobile OsmocomBB (Mobile Station Emulator)"
     echo "  hlr, osmo-hlr          OsmoHLR (Home Location Register)"
     echo "  mgw, osmo-mgw          OsmoMGW (Media Gateway)"
     echo "  proxy, vty-proxy       VTY Proxy (HTTP-VTY Bridge)"
@@ -67,18 +69,24 @@ show_help() {
     echo "  --grep PATTERN         Filter logs by pattern"
     echo "  --errors               Show only error messages"
     echo "  --warnings             Show only warnings and errors"
+    echo "  --sms-only             Filter for SMS-related messages only"
+    echo "  --registration         Filter for registration/location update messages"
     echo "  --no-color             Disable colored output"
     echo "  --timestamps           Show timestamps"
     echo "  --export FILE          Export logs to file"
     echo ""
     echo "Examples:"
     echo "  $0 msc                 # Show MSC logs"
+    echo "  $0 bb --follow         # Follow mobile emulator logs"
     echo "  $0 all --follow        # Follow all service logs"
     echo "  $0 stp --tail 100      # Show last 100 lines from STP"
     echo "  $0 all --since 1h      # Show logs from last hour"
     echo "  $0 msc --grep SMS      # Filter MSC logs for SMS messages"
+    echo "  $0 all --sms-only      # Show only SMS-related logs"
+    echo "  $0 all --registration  # Show only registration logs"
     echo "  $0 all --errors        # Show only error messages from all services"
     echo "  $0 msc --export msc.log # Export MSC logs to file"
+    echo "  $0 bb --grep 'location update' # Filter mobile logs for location updates"
     echo ""
 }
 
@@ -94,6 +102,12 @@ get_service_name() {
             ;;
         "bsc"|"osmo-bsc")
             echo "osmo-bsc"
+            ;;
+        "bts"|"osmo-bts")
+            echo "osmo-bts"
+            ;;
+        "bb"|"osmocom-bb"|"mobile")
+            echo "osmocom-bb"
             ;;
         "hlr"|"osmo-hlr")
             echo "osmo-hlr"
@@ -174,13 +188,19 @@ filter_logs() {
     local grep_pattern=$1
     local errors_only=$2
     local warnings_only=$3
+    local sms_only=$4
+    local registration_only=$5
     
     local filter_cmd=""
     
     if [ "$errors_only" = "true" ]; then
-        filter_cmd="grep -i 'error\|fatal\|critical'"
+        filter_cmd="grep -i 'error\|fatal\|critical\|failed\|fail'"
     elif [ "$warnings_only" = "true" ]; then
-        filter_cmd="grep -i 'error\|fatal\|critical\|warning\|warn'"
+        filter_cmd="grep -i 'error\|fatal\|critical\|warning\|warn\|failed\|fail'"
+    elif [ "$sms_only" = "true" ]; then
+        filter_cmd="grep -i 'sms\|short.message\|smpp\|message\|deliver\|submit'"
+    elif [ "$registration_only" = "true" ]; then
+        filter_cmd="grep -i 'location.update\|registration\|attach\|subscriber\|imsi\|vlr\|mm'"
     elif [ -n "$grep_pattern" ]; then
         filter_cmd="grep -i '$grep_pattern'"
     else
@@ -198,9 +218,11 @@ show_logs() {
     local grep_pattern=$5
     local errors_only=${6:-false}
     local warnings_only=${7:-false}
-    local timestamps=${8:-false}
-    local no_color=${9:-false}
-    local export_file=$10
+    local sms_only=${8:-false}
+    local registration_only=${9:-false}
+    local timestamps=${10:-false}
+    local no_color=${11:-false}
+    local export_file=${12}
     
     # Build Docker logs command
     local logs_cmd
@@ -208,7 +230,7 @@ show_logs() {
     
     # Build filter command
     local filter_cmd
-    filter_cmd=$(filter_logs "$grep_pattern" "$errors_only" "$warnings_only")
+    filter_cmd=$(filter_logs "$grep_pattern" "$errors_only" "$warnings_only" "$sms_only" "$registration_only")
     
     log_info "Showing logs for: $service"
     
@@ -241,7 +263,7 @@ show_service_list() {
     echo "Available services:"
     echo ""
     
-    local services=("osmo-stp" "osmo-hlr" "osmo-mgw" "osmo-msc" "osmo-bsc" "vty-proxy" "web-dashboard" "sms-simulator")
+    local services=("osmo-stp" "osmo-hlr" "osmo-mgw" "osmo-msc" "osmo-bsc" "osmo-bts" "osmocom-bb" "vty-proxy" "web-dashboard" "sms-simulator")
     
     for service in "${services[@]}"; do
         if check_service_exists "$service"; then
@@ -260,6 +282,32 @@ show_service_list() {
     echo ""
 }
 
+show_quick_filters() {
+    echo ""
+    echo "Quick Filter Options:"
+    echo ""
+    echo "SMS Troubleshooting:"
+    echo "  $0 msc --sms-only          # SMS processing in MSC"
+    echo "  $0 bb --sms-only           # SMS on mobile emulator"
+    echo "  $0 all --grep 'deliver'    # SMS delivery messages"
+    echo ""
+    echo "Registration Issues:"
+    echo "  $0 all --registration      # Location updates and registration"
+    echo "  $0 bb --grep 'location'    # Mobile location updates"
+    echo "  $0 msc --grep 'vlr'        # VLR operations"
+    echo ""
+    echo "Error Analysis:"
+    echo "  $0 all --errors            # All error messages"
+    echo "  $0 bts --warnings          # BTS warnings and errors"
+    echo "  $0 bb --grep 'failed'      # Mobile operation failures"
+    echo ""
+    echo "Network Issues:"
+    echo "  $0 stp --grep 'sccp'       # SS7/SCCP signaling"
+    echo "  $0 bsc --grep 'connection' # BSC connectivity"
+    echo "  $0 all --grep 'timeout'    # Timeout issues"
+    echo ""
+}
+
 interactive_mode() {
     print_header
     
@@ -273,7 +321,11 @@ interactive_mode() {
         echo "  2. View logs for specific service"
         echo "  3. Follow all logs"
         echo "  4. Search logs"
-        echo "  5. Export logs"
+        echo "  5. SMS troubleshooting logs"
+        echo "  6. Registration troubleshooting logs"
+        echo "  7. Error analysis"
+        echo "  8. Export logs"
+        echo "  9. Quick filter examples"
         echo "  q. Quit"
         echo ""
         
@@ -327,6 +379,56 @@ interactive_mode() {
                 ;;
             5)
                 echo ""
+                echo "SMS Troubleshooting Options:"
+                echo "  1. MSC SMS processing"
+                echo "  2. Mobile SMS activity"
+                echo "  3. All SMS messages"
+                echo ""
+                read -p "Select SMS option: " sms_choice
+                
+                case $sms_choice in
+                    1) show_logs "osmo-msc" false 100 "" "" false false true false ;;
+                    2) show_logs "osmocom-bb" false 100 "" "" false false true false ;;
+                    3) show_logs "all" false 100 "" "" false false true false ;;
+                    *) log_error "Invalid SMS option" ;;
+                esac
+                ;;
+            6)
+                echo ""
+                echo "Registration Troubleshooting Options:"
+                echo "  1. All registration activity"
+                echo "  2. Mobile registration attempts"
+                echo "  3. MSC VLR operations"
+                echo ""
+                read -p "Select registration option: " reg_choice
+                
+                case $reg_choice in
+                    1) show_logs "all" false 100 "" "" false false false true ;;
+                    2) show_logs "osmocom-bb" false 100 "" "" false false false true ;;
+                    3) show_logs "osmo-msc" false 100 "" "vlr" ;;
+                    *) log_error "Invalid registration option" ;;
+                esac
+                ;;
+            7)
+                echo ""
+                echo "Error Analysis Options:"
+                echo "  1. All errors"
+                echo "  2. All warnings and errors"
+                echo "  3. Mobile emulator errors"
+                echo "  4. MSC errors"
+                echo ""
+                read -p "Select error option: " error_choice
+                
+                case $error_choice in
+                    1) show_logs "all" false 200 "" "" true false ;;
+                    2) show_logs "all" false 200 "" "" false true ;;
+                    3) show_logs "osmocom-bb" false 100 "" "" true false ;;
+                    4) show_logs "osmo-msc" false 100 "" "" true false ;;
+                    *) log_error "Invalid error option" ;;
+                esac
+                ;;
+            8)
+                echo ""
                 read -p "Enter service name (or 'all'): " service_name
                 read -p "Enter export filename: " export_filename
                 
@@ -338,7 +440,10 @@ interactive_mode() {
                     continue
                 fi
                 
-                show_logs "$normalized_service" false 1000 "" "" false false false true "$export_filename"
+                show_logs "$normalized_service" false 1000 "" "" false false false false false true "$export_filename"
+                ;;
+            9)
+                show_quick_filters
                 ;;
             q|Q|quit|exit)
                 echo "Goodbye!"
@@ -360,6 +465,8 @@ main() {
     local grep_pattern=""
     local errors_only=false
     local warnings_only=false
+    local sms_only=false
+    local registration_only=false
     local timestamps=false
     local no_color=false
     local export_file=""
@@ -394,6 +501,14 @@ main() {
                 ;;
             --warnings)
                 warnings_only=true
+                shift
+                ;;
+            --sms-only)
+                sms_only=true
+                shift
+                ;;
+            --registration)
+                registration_only=true
                 shift
                 ;;
             --timestamps)
@@ -456,7 +571,8 @@ main() {
     
     # Show logs
     show_logs "$normalized_service" "$follow" "$tail_lines" "$since_time" "$grep_pattern" \
-              "$errors_only" "$warnings_only" "$timestamps" "$no_color" "$export_file"
+              "$errors_only" "$warnings_only" "$sms_only" "$registration_only" \
+              "$timestamps" "$no_color" "$export_file"
 }
 
 # Run main function with all arguments

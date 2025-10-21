@@ -1,4 +1,5 @@
 #!/bin/bash
+
 set -e
 
 # Color codes for output
@@ -15,8 +16,6 @@ echo "This will deploy a complete SS7/GSM testing environment with:"
 echo "- OsmoSTP (SS7 Signaling Transfer Point)"
 echo "- OsmoMSC (Mobile Switching Center with integrated SMSC)"
 echo "- OsmoBSC (Base Station Controller)"
-echo "- OsmoBTS (Base Transceiver Station)"
-echo "- OsmocomBB (Mobile Station Emulator)"
 echo "- OsmoMGW (Media Gateway)"
 echo "- OsmoHLR (Home Location Register)"
 echo "- Web Dashboard (Real-time monitoring)"
@@ -40,6 +39,10 @@ print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
+
+
+
+
 # Main deployment function
 main() {
     print_info "Checking dependencies..."
@@ -59,8 +62,8 @@ main() {
     print_success "All dependencies are available"
     
     print_info "Checking for port conflicts..."
-    # Check if required ports are available (including new BTS and OsmocomBB ports)
-    for port in 4239 4241 4242 4247 4254 4258 2427 2775 2905 5000 6700 8888 9999 14001; do
+    # Check if required ports are available
+    for port in 4239 2905 14001 8888 9999 5000; do
         if netstat -tuln 2>/dev/null | grep -q ":$port " || lsof -i :$port 2>/dev/null | grep -q LISTEN; then
             print_warning "Port $port is already in use. This may cause conflicts."
         fi
@@ -68,60 +71,8 @@ main() {
     print_success "Port check completed"
     
     print_info "Creating required directories..."
-    mkdir -p logs web/assets config docker
+    mkdir -p logs web/assets
     print_success "Directory structure ready"
-    
-    print_info "Checking configuration files..."
-    # Check for required config files
-    config_files=(
-        "config/osmo-stp.cfg"
-        "config/osmo-hlr.cfg"
-        "config/osmo-mgw.cfg"
-        "config/osmo-msc.cfg"
-        "config/osmo-bsc.cfg"
-        "config/osmo-bts.cfg"
-        "config/mobile.cfg"
-    )
-    
-    missing_configs=()
-    for config in "${config_files[@]}"; do
-        if [ ! -f "$config" ]; then
-            missing_configs+=("$config")
-        fi
-    done
-    
-    if [ ${#missing_configs[@]} -gt 0 ]; then
-        print_warning "Missing configuration files: ${missing_configs[*]}"
-        print_info "Please ensure all configuration files are present before deployment"
-    else
-        print_success "All configuration files found"
-    fi
-    
-    print_info "Checking Dockerfile dependencies..."
-    # Check for required Dockerfiles
-    dockerfiles=(
-        "docker/Dockerfile.stp"
-        "docker/Dockerfile.hlr"
-        "docker/Dockerfile.mgw"
-        "docker/Dockerfile.msc"
-        "docker/Dockerfile.bsc"
-        "docker/Dockerfile.bts"
-        "docker/Dockerfile.bb"
-    )
-    
-    missing_dockerfiles=()
-    for dockerfile in "${dockerfiles[@]}"; do
-        if [ ! -f "$dockerfile" ]; then
-            missing_dockerfiles+=("$dockerfile")
-        fi
-    done
-    
-    if [ ${#missing_dockerfiles[@]} -gt 0 ]; then
-        print_warning "Missing Dockerfiles: ${missing_dockerfiles[*]}"
-        print_info "Some services may fail to build"
-    else
-        print_success "All Dockerfiles found"
-    fi
     
     print_info "Setting up management scripts..."
     # Make other scripts executable if they exist
@@ -140,7 +91,6 @@ main() {
     
     print_info "Building Docker images..."
     print_info "This may take several minutes on first run..."
-    print_info "Building core network components..."
     
     if docker-compose build --no-cache; then
         print_success "All images built successfully"
@@ -156,41 +106,18 @@ main() {
         print_success "Deployment completed successfully!"
         
         echo ""
-        echo "🎉 Your complete Osmocom GSM network is now running!"
+        echo "🎉 Your Osmocom SS7 testing environment is now running!"
         echo ""
         echo "Access your services:"
         echo "  📊 Real-time Dashboard: http://localhost:8888"
         echo "  📱 SMS Simulator: http://localhost:9999"
         echo "  🔌 VTY Proxy API: http://localhost:5000"
-        echo ""
-        echo "Direct VTY Access:"
-        echo "  💻 OsmoSTP: telnet localhost 4239"
-        echo "  📱 OsmoMSC: telnet localhost 4254"
-        echo "  📡 OsmoBSC: telnet localhost 4242"
-        echo "  📻 OsmoBTS: telnet localhost 4241"
-        echo "  📞 OsmocomBB: telnet localhost 4247"
-        echo "  📋 OsmoHLR: telnet localhost 4258"
-        echo "  🎵 OsmoMGW: telnet localhost 2427"
-        echo ""
-        echo "Quick Test Commands:"
-        echo "  🔍 Check mobile registration:"
-        echo "    telnet localhost 4247"
-        echo "    > enable"
-        echo "    > location-update"
-        echo ""
-        echo "  📋 Verify subscriber in MSC:"
-        echo "    telnet localhost 4254"
-        echo "    > show subscribers"
-        echo ""
-        echo "  📨 Send test SMS:"
-        echo "    telnet localhost 4254"
-        echo "    > subscriber msisdn 1234567890 sms sender msisdn 987654321 send \"Hello World\""
+        echo "  💻 VTY Direct: telnet localhost 4239"
         echo ""
         echo "Useful commands:"
         echo "  🔍 Check status: docker-compose ps"
         echo "  📋 View logs: docker-compose logs -f"
         echo "  🛑 Stop services: docker-compose down"
-        echo "  🚀 Managed startup: ./startup.sh"
         echo ""
         
         # Wait a moment for services to start
@@ -198,14 +125,6 @@ main() {
         
         print_info "Service status:"
         docker-compose ps
-        
-        echo ""
-        print_info "Next steps:"
-        echo "1. Wait 30-60 seconds for all services to fully initialize"
-        echo "2. Connect to mobile emulator: telnet localhost 4247"
-        echo "3. Perform location update to register with network"
-        echo "4. Test SMS functionality between subscribers"
-        echo "5. Use web dashboard for monitoring and management"
         
     else
         print_error "Failed to start services. Check logs with: docker-compose logs"
