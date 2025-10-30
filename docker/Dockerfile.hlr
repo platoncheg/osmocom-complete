@@ -5,6 +5,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y \
     wget \
     telnet \
+    net-tools \
     gnupg2 \
     software-properties-common \
     apt-transport-https \
